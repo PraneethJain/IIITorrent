@@ -22,7 +22,7 @@ from bitarray import bitarray
 
 from utils import grouper
 
-TORRENT_MANAGER_LOGGING_LEVEL = logging.DEBUG
+TORRENT_MANAGER_LOGGING_LEVEL = logging.INFO
 PEER_CLIENT_LOGGING_LEVEL = logging.INFO
 
 
@@ -179,12 +179,14 @@ class DownloadInfo:
             arr = bitarray(ceil(self.get_real_piece_length(piece_index) / DownloadInfo.MARKED_BLOCK_SIZE))
             arr.setall(False)
             self._piece_block_downloaded[piece_index] = arr
+        else:
+            arr = cast(bitarray, arr)
 
         mark_begin = ceil(begin / DownloadInfo.MARKED_BLOCK_SIZE)
         mark_end = (begin + length) // DownloadInfo.MARKED_BLOCK_SIZE
         arr[mark_begin:mark_end] = True
 
-        cur_piece_blocks_expected = self.piece_blocks_expected[piece_index]
+        cur_piece_blocks_expected = self._piece_blocks_expected[piece_index]
         downloaded_blocks = []
         for block_info in cur_piece_blocks_expected:
             begin, length, future = block_info
@@ -212,7 +214,7 @@ class DownloadInfo:
         if self._piece_downloaded[index]:
             raise ValueError('The whole piece is already downloaded')
 
-        return self._piece_block_downloaded[index].all()
+        return cast(bitarray, self._piece_block_downloaded[index]).all()
 
 
 class TorrentInfo:
@@ -362,7 +364,7 @@ class PeerTCPClient:
     def increase_distrust(self):
         self._distrust_rate += 1
 
-    async def _receive_message(self) -> Optional[Tuple[MessageType, bytes]]:
+    async def _receive_message(self) -> Optional[Tuple[MessageType, memoryview]]:
         data = await self._reader.readexactly(4)
         (length,) = struct.unpack('!I', data)
         if length == 0:  # keep-alive
@@ -390,12 +392,12 @@ class PeerTCPClient:
             self._writer.write(portion)
 
     @staticmethod
-    def _check_payload_len(message_id: MessageType, payload: bytes, expected_len: int):
+    def _check_payload_len(message_id: MessageType, payload: memoryview, expected_len: int):
         if len(payload) != expected_len:
             raise ValueError('Invalid payload length on message_id = {} '
                              '(expected {}, got {})'.format(message_id.name, expected_len, len(payload)))
 
-    def _handle_setting_states(self, message_id: MessageType, payload: bytes):
+    def _handle_setting_states(self, message_id: MessageType, payload: memoryview):
         PeerTCPClient._check_payload_len(message_id, payload, 0)
 
         if message_id == MessageType.choke:
@@ -407,9 +409,9 @@ class PeerTCPClient:
         elif message_id == MessageType.not_interested:
             self._peer_interested = False
 
-    def _handle_haves(self, message_id: MessageType, payload: bytes):
+    def _handle_haves(self, message_id: MessageType, payload: memoryview):
         if message_id == MessageType.have:
-            (index,) = struct.unpack('!I', payload)
+            (index,) = struct.unpack('!I', cast(bytes, payload))
             self._download_info.piece_owners[index].add(self._peer)
         elif message_id == MessageType.bitfield:
             piece_count = self._download_info.piece_count
@@ -440,8 +442,8 @@ class PeerTCPClient:
 
         self._uploaded += length
 
-    async def _process_requests(self, message_id: MessageType, payload: bytes):
-        piece_index, begin, length = struct.unpack('!3I', payload)
+    async def _process_requests(self, message_id: MessageType, payload: memoryview):
+        piece_index, begin, length = struct.unpack('!3I', cast(bytes, payload))
         self._check_position_range(piece_index, begin, length)
 
         if message_id == MessageType.request:
@@ -462,9 +464,9 @@ class PeerTCPClient:
         elif message_id == MessageType.cancel:
             pass
 
-    def _handle_block(self, message_id: MessageType, payload: bytes):
+    def _handle_block(self, payload: memoryview):
         if not self._am_interested:
-            # For example, we can be not interested in pieces from peers with big distruct rate
+            # For example, we can be not interested in pieces from peers with big distrust rate
             return
 
         fmt = '!2I'
@@ -499,7 +501,7 @@ class PeerTCPClient:
             elif message_id in (MessageType.request, MessageType.cancel):
                 await self._process_requests(message_id, payload)
             elif message_id == MessageType.piece:
-                self._handle_block(message_id, payload)
+                self._handle_block(payload)
             elif message_id == MessageType.port:
                 PeerTCPClient._check_payload_len(message_id, payload, 2)
                 # TODO (?): Ignore or implement DHT
@@ -820,7 +822,7 @@ class TorrentManager:
     _INF = float('inf')
 
     def get_peer_rate(self, peer: Peer):
-        """Manager will download from peers with maximal rate first."""
+        # Manager will download from peers with maximal rate first
 
         if peer not in self._peer_clients:
             return -TorrentManager._INF
