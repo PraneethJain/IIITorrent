@@ -693,6 +693,10 @@ class BlockRequest:
         return self.piece_index, self.block_begin, self.block_length
 
 
+class NotEnoughPeersError(RuntimeError):
+    pass
+
+
 class TorrentManager:
     def __init__(self, torrent_info: TorrentInfo, our_peer_id: bytes):
         self._torrent_info = torrent_info
@@ -850,57 +854,76 @@ class TorrentManager:
     DOWNLOAD_PEER_COUNT = 20
     DOWNLOAD_REQUEST_QUEUE_SIZE = 10
 
+    async def _append_requests(self, processed_requests: List[BlockRequest],
+                               future_to_request: Dict[asyncio.Future, BlockRequest]) -> Optional[Peer]:
+        download_info = self._torrent_info.download_info
+
+        if not await self._prepare_requests():
+            return None
+
+        first_request = self._request_deque[0]
+        available_peers = download_info.piece_owners[first_request.piece_index] & self._peer_clients.keys()
+        # available_peers = {peer for peer in available_peers if not self._peer_clients[peer].peer_choking}  # FIXME:
+        available_peers -= self._peers_busy
+        if not available_peers:
+            raise NotEnoughPeersError('No peers to perform a request')
+
+        self._request_deque.popleft()
+        performing_peer = max(available_peers, key=self.get_peer_rate)
+        client = self._peer_clients[performing_peer]
+        client.am_interested = True
+        # FIXME: It should be done here, it's a hack for a case when client connected
+        #        after sending am_interested
+
+        request = first_request
+        while True:
+            processed_requests.append(request)
+            future_to_request[request.downloaded] = request
+
+            client.send_request(*request.client_request)
+            # FIXME: If the request failed, will we got an exception here? It's inadmissible
+
+            if (len(processed_requests) == TorrentManager.DOWNLOAD_REQUEST_QUEUE_SIZE or
+                    not await self._prepare_requests()):
+                break
+            request = self._request_deque[0]
+            if performing_peer not in download_info.piece_owners[request.piece_index]:
+                break
+
+            self._request_deque.popleft()
+        return performing_peer
+
     async def _execute_block_requests(self):
         download_info = self._torrent_info.download_info
 
         processed_requests = []
         future_to_request = {}
         while True:
-            if not await self._prepare_requests():
-                return
-            request = self._request_deque[0]
+            try:
+                performing_peer = await self._append_requests(processed_requests, future_to_request)
 
-            alive_piece_owners = download_info.piece_owners[request.piece_index] & self._peer_clients.keys()
-            # available_peers = {peer for peer in alive_piece_owners if not self._peer_clients[peer].peer_choking}
-            available_peers = alive_piece_owners
-            # FIXME: Uncomment
-            available_peers -= self._peers_busy
-            if not available_peers:
-                # TODO: Request more peers in some cases (but not too often)
-                #       It should be implemented in announce task, that must wake up this task on case of new peers
-                # TODO: Maybe start another piece?
-                await asyncio.sleep(5)
-                continue
-            self._request_deque.popleft()
+                if not processed_requests:
+                    return
 
-            peer = max(available_peers, key=self.get_peer_rate)
-            client = self._peer_clients[peer]
-            client.am_interested = True
-            # FIXME: It should be done here, it's a hack for a case when client connected after sending am_interested
-            self._peers_busy.add(peer)
-
-            while True:
-                processed_requests.append(request)
-                future_to_request[request.downloaded] = request
-
-                client.send_request(*request.client_request)
-                # FIXME: If the request failed, will we got an exception here? It's inadmissible
-
-                if (len(processed_requests) == TorrentManager.DOWNLOAD_REQUEST_QUEUE_SIZE or
-                        not await self._prepare_requests()):
-                    break
-                request = self._request_deque[0]
-
-                if peer not in download_info.piece_owners[request.piece_index]:
-                    break
-                self._request_deque.popleft()
+                if performing_peer is not None:
+                    self._peers_busy.add(performing_peer)
+            except NotEnoughPeersError:
+                if not processed_requests:
+                    # TODO: Request more peers in some cases (but not too often)
+                    #       It should be implemented in announce task, that must wake up this task on case of new peers
+                    # TODO: Maybe start another piece?
+                    await asyncio.sleep(5)
+                    continue
+                else:
+                    performing_peer = None
 
             expected_futures = [request.downloaded for request in processed_requests]
             futures_done, futures_pending = await asyncio.wait(expected_futures,
                                                                return_when=asyncio.FIRST_COMPLETED, timeout=5)
 
             if len(futures_pending) < len(expected_futures):
-                self._peers_busy.remove(peer)
+                if performing_peer is not None:
+                    self._peers_busy.remove(performing_peer)
 
                 for fut in futures_done:
                     piece_index = future_to_request[fut].piece_index
@@ -919,7 +942,8 @@ class TorrentManager:
                 logger.debug('requests failed, sleeping')
                 await asyncio.sleep(5)
 
-                self._peers_busy.remove(peer)
+                if performing_peer is not None:
+                    self._peers_busy.remove(performing_peer)
 
     async def download(self):
         download_info = self._torrent_info.download_info
