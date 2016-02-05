@@ -18,12 +18,15 @@ from urllib.parse import urlencode
 from urllib.request import urlopen
 
 import bencodepy
+import contexttimer
 from bitarray import bitarray
 
 from utils import grouper
 
 TORRENT_MANAGER_LOGGING_LEVEL = logging.INFO
 PEER_CLIENT_LOGGING_LEVEL = logging.INFO
+
+TIMER_WARNING_THRESHOLD_MS = 50
 
 
 logging.basicConfig(format='%(levelname)s %(asctime)s %(name)-23s %(message)s', datefmt='%H:%M:%S')
@@ -741,7 +744,10 @@ class TorrentManager:
 
     def _flush_piece(self, index: int):
         piece_offset, cur_piece_length = self._get_piece_position(index)
-        self._file_structure.flush(piece_offset, cur_piece_length)
+        with contexttimer.Timer() as timer:
+            self._file_structure.flush(piece_offset, cur_piece_length)
+        if timer.elapsed >= TIMER_WARNING_THRESHOLD_MS:
+            logger.warning('Too long flush (%s ms)', timer.elapsed)
 
     async def _select_piece_to_download(self) -> bool:
         if not self._non_started_pieces:
@@ -786,8 +792,11 @@ class TorrentManager:
         assert download_info.is_all_piece_blocks_downloaded(piece_index)
 
         piece_offset, cur_piece_length = self._get_piece_position(piece_index)
-        data = self._file_structure.read(piece_offset, cur_piece_length)
-        actual_digest = hashlib.sha1(data).digest()
+        with contexttimer.Timer() as timer:
+            data = self._file_structure.read(piece_offset, cur_piece_length)
+            actual_digest = hashlib.sha1(data).digest()
+        if timer.elapsed >= TIMER_WARNING_THRESHOLD_MS:
+            logger.warning('Too long hash comparison (%s ms)', timer.elapsed)
         if actual_digest == download_info.piece_hashes[piece_index]:
             await self._finish_downloading_piece(piece_index)
             return
