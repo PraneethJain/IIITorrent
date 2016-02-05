@@ -256,8 +256,7 @@ class PeerTCPClient:
 
     PEER_HANDSHAKE_MESSAGE = b'BitTorrent protocol'
 
-    @asyncio.coroutine
-    def _perform_handshake(self):
+    async def _perform_handshake(self):
         info_hash = self._download_info.info_hash
 
         message = PeerTCPClient.PEER_HANDSHAKE_MESSAGE
@@ -267,7 +266,7 @@ class PeerTCPClient:
         self._writer.write(handshake_data)
         self._logger.debug('handshake sent')
 
-        response = yield from self._reader.readexactly(len(handshake_data))
+        response = await self._reader.readexactly(len(handshake_data))
         # FIXME: timeouts?
 
         if response[:message_len + 1] != handshake_data[:message_len + 1]:
@@ -288,16 +287,15 @@ class PeerTCPClient:
 
     CONNECT_TIMEOUT = 5.0
 
-    @asyncio.coroutine
-    def connect(self):
+    async def connect(self):
         self._logger.debug('trying to connect')
 
-        self._reader, self._writer = yield from asyncio.wait_for(
+        self._reader, self._writer = await asyncio.wait_for(
             asyncio.open_connection(self._peer.host, self._peer.port), PeerTCPClient.CONNECT_TIMEOUT)
         self._logger.debug('connected')
 
         try:
-            yield from self._perform_handshake()
+            await self._perform_handshake()
         except:
             self.close()
             raise
@@ -353,15 +351,14 @@ class PeerTCPClient:
     def increase_distrust(self):
         self._distrust_rate += 1
 
-    @asyncio.coroutine
-    def _receive_message(self) -> Tuple[MessageType, bytes]:
-        data = yield from self._reader.readexactly(4)
+    async def _receive_message(self) -> Tuple[MessageType, bytes]:
+        data = await self._reader.readexactly(4)
         (length,) = struct.unpack('!I', data)
         if length == 0:  # keep-alive
             return b''
 
         # FIXME: Don't receive too much stuff
-        data = yield from self._reader.readexactly(length)
+        data = await self._reader.readexactly(length)
         message_id = MessageType(data[0])
         payload = memoryview(data)[1:]
 
@@ -432,8 +429,7 @@ class PeerTCPClient:
 
         self._uploaded += length
 
-    @asyncio.coroutine
-    def _process_requests(self, message_id: MessageType, payload: bytes):
+    async def _process_requests(self, message_id: MessageType, payload: bytes):
         piece_index, begin, length = struct.unpack('!3I', payload)
         self._check_position_range(piece_index, begin, length)
 
@@ -449,7 +445,7 @@ class PeerTCPClient:
                 return
             # FIXME: Check that one block isn't requested for many times?
 
-            yield from self.drain()
+            await self.drain()
             # FIXME: Check here if block hasn't been cancelled. We need sure that cancel message can be received
             # FIXME: (run this as a task? avoid DoS in implementing; we should can receive and send "simultaneously")
             self._send_block(piece_index, begin, length)
@@ -477,10 +473,9 @@ class PeerTCPClient:
         self._download_info.piece_sources[piece_index].add(self._peer)
 
 
-    @asyncio.coroutine
-    def run(self):
+    async def run(self):
         while True:
-            message_id, payload = yield from self._receive_message()
+            message_id, payload = await self._receive_message()
             # FIXME: send keep-alives (or do it in another Task)
 
             if message_id in (MessageType.choke, MessageType.unchoke,
@@ -489,7 +484,7 @@ class PeerTCPClient:
             elif message_id in (MessageType.have, MessageType.bitfield):
                 self._handle_haves(message_id, payload)
             elif message_id in (MessageType.request, MessageType.cancel):
-                yield from self._process_requests(message_id, payload)
+                await self._process_requests(message_id, payload)
             elif message_id == MessageType.piece:
                 self._handle_block(message_id, payload)
             elif message_id == MessageType.port:
@@ -506,9 +501,8 @@ class PeerTCPClient:
 
         self._send_message(MessageType.request, struct.pack('!3I', piece_index, begin, length))
 
-    @asyncio.coroutine
-    def drain(self):
-        yield from self._writer.drain()
+    async def drain(self):
+        await self._writer.drain()
 
     def close(self):
         self._writer.close()
@@ -676,18 +670,17 @@ class TorrentManager:
         self._file_structure = FileStructure(DOWNLOAD_DIR, torrent_info.download_info)
 
     @staticmethod
-    @asyncio.coroutine
-    def _handle_peer(client: PeerTCPClient):
-        yield from client.connect()
+    async def _handle_peer(client: PeerTCPClient):
+        await client.connect()
         try:
-            yield from client.run()
+            await client.run()
         finally:
             client.close()
 
     def _add_peer_client(self, peer: Peer):
         client = PeerTCPClient(self._torrent_info.download_info, self._file_structure,
                                self._our_peer_id, peer)
-        task = asyncio.async(TorrentManager._handle_peer(client))
+        task = asyncio.ensure_future(TorrentManager._handle_peer(client))
         task.add_done_callback(partial(self._remove_peer_client, peer))
         self._peer_clients[peer] = client
         self._peer_tasks[peer] = task
@@ -723,8 +716,7 @@ class TorrentManager:
         rate -= 2 ** client.distrust_rate
         return rate
 
-    @asyncio.coroutine
-    def _download_piece(self, piece_index: int):
+    async def _download_piece(self, piece_index: int):
         download_info = self._torrent_info.download_info
 
         for peer in self._peers_interested_to_me - download_info.piece_owners[piece_index]:
@@ -767,7 +759,7 @@ class TorrentManager:
                         # FIXME: If request failed, will we got an exception here? It's inadmissible
 
                         try:
-                            yield from asyncio.wait_for(asyncio.shield(block_downloaded), 7.0)  # FIXME: timeout
+                            await asyncio.wait_for(asyncio.shield(block_downloaded), 7.0)  # FIXME: timeout
                             break
                         except asyncio.TimeoutError:
                             pass
@@ -775,7 +767,7 @@ class TorrentManager:
                         break
                     logger.debug('iteration failed')
 
-                    yield from asyncio.sleep(7.0)
+                    await asyncio.sleep(7.0)
                     # TODO: Request more peers here if we can
 
             if not download_info.is_all_piece_blocks_downloaded(piece_index):
@@ -797,8 +789,7 @@ class TorrentManager:
         owners = self._torrent_info.download_info.piece_owners[index]
         return len(owners) if owners else TorrentManager._INF
 
-    @asyncio.coroutine
-    def download(self):
+    async def download(self):
         download_info = self._torrent_info.download_info
 
         self._tracker_client.announce(0, 0, download_info.total_size, 'started')
@@ -820,29 +811,27 @@ class TorrentManager:
             logger.info('progress %.1lf%% (%s / %s pieces)', progress * 100,
                          downloaded_piece_count, download_info.piece_count)
 
-            yield from self._download_piece(cur_piece)
+            await self._download_piece(cur_piece)
 
             remaining_piece_indexes.remove(cur_piece)
         logger.info('file download complete')
 
         # TODO: announces, upload
 
-    @asyncio.coroutine
-    def stop(self):
+    async def stop(self):
         self._file_structure.close()
 
         for task in self._peer_tasks.values():
             task.cancel()
         if self._peer_tasks:
-            yield from asyncio.wait(self._peer_tasks.values())
+            await asyncio.wait(self._peer_tasks.values())
 
 
-@asyncio.coroutine
-def handle_download(manager: TorrentManager):
+async def handle_download(manager: TorrentManager):
     try:
-        yield from manager.download()
+        await manager.download()
     finally:
-        yield from manager.stop()
+        await manager.stop()
 
 
 def main():
@@ -854,7 +843,7 @@ def main():
     torrent_manager = TorrentManager(torrent_info, our_peer_id)
 
     loop = asyncio.get_event_loop()
-    manager_task = asyncio.async(handle_download(torrent_manager))
+    manager_task = asyncio.ensure_future(handle_download(torrent_manager))
     try:
         loop.run_until_complete(manager_task)
     except KeyboardInterrupt:
