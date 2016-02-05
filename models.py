@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import random
 import socket
@@ -6,7 +7,6 @@ from collections import OrderedDict
 from math import ceil
 from typing import List, MutableSet, MutableSequence, Tuple, cast, Optional
 
-import asyncio
 import bencodepy
 from bitarray import bitarray
 

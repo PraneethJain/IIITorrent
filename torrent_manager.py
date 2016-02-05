@@ -2,11 +2,11 @@ import asyncio
 import hashlib
 import logging
 import random
+import time
 from collections import deque
 from typing import Dict, List, MutableSet, Optional, Tuple, Sequence
 
 import contexttimer
-import time
 
 from file_structure import FileStructure
 from models import Peer, TorrentInfo

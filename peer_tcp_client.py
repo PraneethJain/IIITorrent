@@ -11,6 +11,7 @@ from bitarray import bitarray
 from file_structure import FileStructure
 from models import DownloadInfo, Peer, SHA1_DIGEST_LEN
 
+
 CLIENT_LOGGER_LEVEL = logging.INFO
 
 TIMER_WARNING_THRESHOLD_MS = 50
