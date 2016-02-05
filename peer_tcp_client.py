@@ -300,10 +300,12 @@ class PeerTCPClient:
                 PeerTCPClient._check_payload_len(message_id, payload, 2)
                 # TODO: Ignore or implement DHT
 
-    def send_request(self, piece_index: int, begin: int, length: int):  # FIXME:
+    def send_have(self, piece_index: int):
+        self._send_message(MessageType.have, struct.pack('!I', piece_index))
+
+    def send_request(self, piece_index: int, begin: int, length: int):
         self._check_position_range(piece_index, begin, length)
-        if self._peer not in self._download_info.piece_owners[piece_index]:
-            raise ValueError("Peer doesn't have this piece")
+        assert self._peer in self._download_info.piece_owners[piece_index]
 
         self._send_message(MessageType.request, struct.pack('!3I', piece_index, begin, length))
 

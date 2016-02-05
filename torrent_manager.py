@@ -161,8 +161,10 @@ class TorrentManager:
             else:
                 self._peer_clients[peer].am_interested = False
 
-        logger.debug('piece %s finished', piece_index)
+        for client in self._peer_clients.values():
+            client.send_have(piece_index)
 
+        logger.debug('piece %s finished', piece_index)
         progress = download_info.downloaded_piece_count / download_info.piece_count
         logger.info('progress %.1lf%% (%s / %s pieces)', progress * 100,
                     download_info.downloaded_piece_count, download_info.piece_count)
