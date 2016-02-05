@@ -25,9 +25,13 @@ from bitarray import bitarray
 from utils import grouper
 
 
+TORRENT_MANAGER_LOGGING_LEVEL = logging.DEBUG
+PEER_CLIENT_LOGGING_LEVEL = logging.INFO
+
+
 logging.basicConfig(format='%(levelname)s %(asctime)s %(name)-23s %(message)s', datefmt='%H:%M:%S')
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger.setLevel(TORRENT_MANAGER_LOGGING_LEVEL)
 
 
 DOWNLOAD_DIR = 'downloads'
@@ -240,7 +244,7 @@ class PeerTCPClient:
         self._peer = peer
 
         self._logger = logging.getLogger('[{}]'.format(peer))
-        self._logger.setLevel(logging.INFO)
+        self._logger.setLevel(PEER_CLIENT_LOGGING_LEVEL)
 
         self._am_choking = True
         self._am_interested = False
@@ -445,8 +449,7 @@ class PeerTCPClient:
                 # also because its download flag can be removed for some reasons
                 return
             # FIXME: Check that one block isn't requested for many times?
-
-            await self.drain()
+            # or that there's not requested too many blocks?
             # FIXME: Check here if block hasn't been cancelled. We need sure that cancel message can be received
             # FIXME: (run this as a task? avoid DoS in implementing; we should can receive and send "simultaneously")
             self._send_block(piece_index, begin, length)
@@ -738,53 +741,78 @@ class TorrentManager:
         rate -= 2 ** client.distrust_rate
         return rate
 
-    CONCURRENT_BLOCK_REQUESTS = 20
+    DOWNLOAD_PEER_COUNT = 20
+    DOWNLOAD_REQUEST_QUEUE_SIZE = 10
 
     async def _execute_block_requests(self, piece_index: int, blocks_to_download: queue.Queue):
         download_info = self._torrent_info.download_info
-        cur_piece_length = download_info.get_real_piece_length(piece_index)
-        total_block_count = ceil(cur_piece_length / TorrentManager.REQUEST_LENGTH)
 
-        while not blocks_to_download.empty():
-            available_peers = download_info.piece_owners[piece_index] & self._peer_clients.keys() - self._peers_busy
+        expected_blocks = []
+        future_to_block_info = {}
+        while not blocks_to_download.empty() or expected_blocks:
+            available_peers = (download_info.piece_owners[piece_index] & self._peer_clients.keys()) - self._peers_busy
             # TODO: check whether we choked?
             if not available_peers:
                 # TODO: Request more peers in some cases (but not too often)
-                await asyncio.sleep(2.0)
+                #       It should be implemented in announce task, that must wake up this task on case of new peers
+                await asyncio.sleep(3.0)
                 continue
 
             peer = max(available_peers, key=self.get_peer_rate)
-            block_info = blocks_to_download.get()
-            block_begin, block_length, block_downloaded_future = block_info
-
             client = self._peer_clients[peer]
-            client.am_interested = True
+            client.am_interested = True  # FIXME: Is it right to do it here?
             self._peers_interested_to_me.add(peer)
             self._peers_busy.add(peer)
-            client.send_request(piece_index, block_begin, block_length)
-            # FIXME: Don't request twice? No, we can do it (what if we were choked?)
-            # FIXME: If the request failed, will we got an exception here? It's inadmissible
 
-            try:
-                await asyncio.wait_for(asyncio.shield(block_downloaded_future), 10.0)  # FIXME: timeout
-            except asyncio.TimeoutError:
-                blocks_to_download.put(block_info)
+            while (len(expected_blocks) < TorrentManager.DOWNLOAD_REQUEST_QUEUE_SIZE and
+                   not blocks_to_download.empty()):
+                block_info = blocks_to_download.get()
+                block_begin, block_length, block_downloaded_future = block_info
+                if block_downloaded_future.done():
+                    continue
+
+                client.send_request(piece_index, block_begin, block_length)
+                # FIXME: If the request failed, will we got an exception here? It's inadmissible
+                expected_blocks.append(block_info)
+                future_to_block_info[block_downloaded_future] = block_info
+
+            expected_futures = [block_downloaded_future for _, _, block_downloaded_future in expected_blocks]
+            logger.debug('%s - len(expected_futures) = %s', peer, len(expected_futures))
+            futures_done, futures_pending = await asyncio.wait(expected_futures,
+                                                               return_when=asyncio.FIRST_COMPLETED, timeout=5)
+            logger.debug('%s - %s futures done, %s pending', peer, len(futures_done), len(futures_pending))
+
+            self._peers_busy.remove(peer)
+
+            if len(expected_futures) == len(futures_pending):
+                for fut in futures_pending:
+                    blocks_to_download.put(future_to_block_info[fut])
+                    del future_to_block_info[fut]
+                expected_blocks = []
+                logger.debug('requests failed')
+
+                await asyncio.sleep(3.0)
                 continue
-            finally:
-                self._peers_busy.remove(peer)
 
-            progress = 1 - blocks_to_download.qsize() / total_block_count
-            logger.debug('piece progress %.1lf%% (%s / %s blocks)',
-                         progress * 100, total_block_count - blocks_to_download.qsize(), total_block_count)
+            for fut in futures_done:
+                del future_to_block_info[fut]
+            expected_blocks = [future_to_block_info[fut] for fut in futures_pending]
 
     async def _download_piece(self, piece_index: int):
         download_info = self._torrent_info.download_info
         cur_piece_length = download_info.get_real_piece_length(piece_index)
 
-        for peer in self._peers_interested_to_me - download_info.piece_owners[piece_index]:
-            if peer in self._peer_clients:
-                self._peer_clients[peer].am_interested = False
-            self._peers_interested_to_me.remove(peer)
+        alive_peers = self._peer_clients.keys()
+        alive_piece_owners = download_info.piece_owners[piece_index] & alive_peers
+        for peer in (self._peers_interested_to_me - alive_piece_owners) & alive_peers:
+            self._peer_clients[peer].am_interested = False
+        for peer in alive_piece_owners:
+            self._peer_clients[peer].am_interested = True
+        self._peers_interested_to_me = alive_piece_owners
+        logger.debug('piece owned by %s alive peers', len(alive_piece_owners))
+        # TODO: what if there's zero?
+        # TODO: show interest to new peers (and add them to self._peers_interested_to_me)
+        #       because they can be elected for downloading in _execute_block_requests
 
         while True:
             blocks_expected = download_info.piece_blocks_expected[piece_index]
@@ -799,7 +827,7 @@ class TorrentManager:
                 blocks_to_download.put(block_info)
 
             request_executors = [asyncio.ensure_future(self._execute_block_requests(piece_index, blocks_to_download))
-                                 for _ in range(TorrentManager.CONCURRENT_BLOCK_REQUESTS)]
+                                 for _ in range(TorrentManager.DOWNLOAD_PEER_COUNT)]
             try:
                 await asyncio.wait(request_executors)
             finally:
@@ -834,7 +862,7 @@ class TorrentManager:
         download_info = self._torrent_info.download_info
 
         self._tracker_client.announce(0, 0, download_info.total_size, 'started')
-        peers_to_connect = list(self._tracker_client.peers)[:30]
+        peers_to_connect = list(self._tracker_client.peers)
         # FIXME: handle exceptions, use aiohttp
 
         for peer in peers_to_connect:
