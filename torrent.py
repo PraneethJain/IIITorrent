@@ -179,17 +179,21 @@ class DownloadInfo:
     def mark_downloaded_blocks(self, piece_index: int, begin: int, length: int):
         if self._piece_downloaded[piece_index]:
             raise ValueError('The piece is already downloaded')
+        real_piece_length = self.get_real_piece_length(piece_index)
 
         arr = self._piece_block_downloaded[piece_index]
         if arr is None:
-            arr = bitarray(ceil(self.get_real_piece_length(piece_index) / DownloadInfo.MARKED_BLOCK_SIZE))
+            arr = bitarray(ceil(real_piece_length / DownloadInfo.MARKED_BLOCK_SIZE))
             arr.setall(False)
             self._piece_block_downloaded[piece_index] = arr
         else:
             arr = cast(bitarray, arr)
 
         mark_begin = ceil(begin / DownloadInfo.MARKED_BLOCK_SIZE)
-        mark_end = (begin + length) // DownloadInfo.MARKED_BLOCK_SIZE
+        if begin + length == real_piece_length:
+            mark_end = len(arr)
+        else:
+            mark_end = (begin + length) // DownloadInfo.MARKED_BLOCK_SIZE
         arr[mark_begin:mark_end] = True
 
         cur_piece_blocks_expected = self._piece_blocks_expected[piece_index]
