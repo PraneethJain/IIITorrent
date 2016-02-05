@@ -19,11 +19,12 @@ from urllib.request import urlopen
 
 import bencodepy
 import contexttimer
+import time
 from bitarray import bitarray
 
 from utils import grouper
 
-TORRENT_MANAGER_LOGGING_LEVEL = logging.INFO
+TORRENT_MANAGER_LOGGING_LEVEL = logging.DEBUG
 PEER_CLIENT_LOGGING_LEVEL = logging.INFO
 
 TIMER_WARNING_THRESHOLD_MS = 50
@@ -102,9 +103,11 @@ class DownloadInfo:
         self.suggested_name = suggested_name
         self.files = files
         self.private = private
-        # TODO: Check match between hash count and file length
 
         piece_count = len(piece_hashes)
+        if ceil(self.total_size / piece_length) != piece_count:
+            raise ValueError('Invalid count of piece hashes')
+
         self._piece_owners = [set() for _ in range(piece_count)]
         self._piece_sources = [set() for _ in range(piece_count)]
         self._piece_downloaded = bitarray(piece_count)
@@ -294,14 +297,15 @@ class PeerTCPClient:
         offset += SHA1_DIGEST_LEN
 
         actual_peer_id = response[offset:offset + len(self._our_peer_id)]
+        if self._our_peer_id == actual_peer_id:
+            raise ValueError('Connection to ourselves')
         if self._peer.peer_id is not None and self._peer.peer_id != actual_peer_id:
             raise ValueError('Unexpected peer_id')
-        elif self._peer.peer_id is None:
-            self._peer.peer_id = actual_peer_id
+        self._peer.peer_id = actual_peer_id
 
         self._logger.debug('handshake performed')
 
-    CONNECT_TIMEOUT = 5
+    CONNECT_TIMEOUT = 3
 
     async def connect(self):
         self._logger.debug('trying to connect')
@@ -374,8 +378,13 @@ class PeerTCPClient:
             return None
 
         # FIXME: Don't receive too much stuff
+        # TODO: timeouts
         data = await self._reader.readexactly(length)
-        message_id = MessageType(data[0])
+        try:
+            message_id = MessageType(data[0])
+        except ValueError:
+            logger.debug('Unknown message type %s', data[0])
+            return None
         payload = memoryview(data)[1:]
 
         self._logger.debug('incoming message %s length=%s', message_id.name, length)
@@ -508,9 +517,6 @@ class PeerTCPClient:
             elif message_id == MessageType.port:
                 PeerTCPClient._check_payload_len(message_id, payload, 2)
                 # TODO (?): Ignore or implement DHT
-            else:
-                # TODO: Unknown message, we can log it
-                pass
 
     def send_request(self, piece_index: int, begin: int, length: int):  # FIXME:
         self._check_position_range(piece_index, begin, length)
@@ -630,8 +636,7 @@ class TrackerHTTPClient:
 
     def _handle_optional_response_fields(self, response: OrderedDict):
         if b'warning message' in response:
-            # FIXME: Can do something
-            pass
+            logger.warning('Tracker returned warning message: %s', response[b'warning message'].decode())
 
         if b'tracker id' in response:
             self._tracker_id = response[b'tracker id']
@@ -706,14 +711,17 @@ class TorrentManager:
         self._our_peer_id = our_peer_id
 
         self._tracker_client = TrackerHTTPClient(self._torrent_info, self._our_peer_id)
-        self._peer_clients = {}         # type: Dict[Peer, PeerTCPClient]
-        self._client_executors = []     # type: List[asyncio.Task]
-        self._request_executors = []    # type: List[asyncio.Task]
+        self._peer_clients = {}                  # type: Dict[Peer, PeerTCPClient]
+        self._peer_hanged_time = {}              # type: Dict[Peer, int]
+        self._client_executors = []              # type: List[asyncio.Task]
+        self._request_executors = []             # type: List[asyncio.Task]
+        self._executors_processed_requests = []  # type: List[List[BlockRequest]]
 
         self._non_started_pieces = None   # type: List[int]
         self._interesting_pieces = set()  # type: MutableSet[int]
         self._request_deque = deque()
         self._peers_busy = set()          # type: MutableSet[Peer]
+        self._endgame_mode = False  # TODO: Send cancels in endgame mode
 
         self._file_structure = FileStructure(DOWNLOAD_DIR, torrent_info.download_info)
 
@@ -729,6 +737,8 @@ class TorrentManager:
                 client.close()
 
                 del self._peer_clients[peer]
+                if peer in self._peer_hanged_time:
+                    del self._peer_hanged_time[peer]
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -782,8 +792,8 @@ class TorrentManager:
             pass
         # TODO: What if there's no alive_piece_owners?
 
-        logger.debug('piece %s started (concurrency: %s pieces, %s peers)',
-                     piece_index, len(self._interesting_pieces), len(self._peers_busy) + 1)
+        logger.debug('piece %s started (owned by %s alive peers, concurrency: %s pieces, %s peers)',
+                     piece_index, len(alive_piece_owners), len(self._interesting_pieces), len(self._peers_busy) + 1)
         # Count busy peers and a peer for a task launched _start_downloading_piece
 
     async def _validate_piece(self, piece_index: int):
@@ -834,10 +844,18 @@ class TorrentManager:
 
     _INF = float('inf')
 
+    PEER_LEAVING_ALONE_TIME = 20
+    PEER_LEAVING_ALONE_TIME_ENDGAME = 40
+
     def get_peer_rate(self, peer: Peer):
         # Manager will download from peers with maximal rate first
 
-        if peer not in self._peer_clients:
+        if self._endgame_mode:
+            leaving_alone_time = TorrentManager.PEER_LEAVING_ALONE_TIME_ENDGAME
+        else:
+            leaving_alone_time = TorrentManager.PEER_LEAVING_ALONE_TIME
+        if peer not in self._peer_clients or \
+                (peer in self._peer_hanged_time and time.time() - self._peer_hanged_time[peer] <= leaving_alone_time):
             return -TorrentManager._INF
         client = self._peer_clients[peer]
 
@@ -902,38 +920,62 @@ class TorrentManager:
             self._request_deque.popleft()
         return performing_peer
 
-    async def _execute_block_requests(self):
+    NO_REQUESTS_SLEEP_TIME = 2
+    NO_PEERS_SLEEP_TIME = 5
+
+    REQUEST_TIMEOUT = 6
+    REQUEST_TIMEOUT_ENDGAME = 1
+
+    async def _execute_block_requests(self, processed_requests: List[BlockRequest]):
         download_info = self._torrent_info.download_info
 
-        processed_requests = []
         future_to_request = {}
+        performer = None
         while True:
             try:
-                performing_peer = await self._append_requests(processed_requests, future_to_request)
+                new_performer = await self._append_requests(processed_requests, future_to_request)
 
                 if not processed_requests:
-                    return
+                    if not any(self._executors_processed_requests):
+                        return
 
-                if performing_peer is not None:
-                    self._peers_busy.add(performing_peer)
+                    if not self._endgame_mode:
+                        non_finished_pieces = [i for i in range(download_info.piece_count)
+                                               if not download_info.piece_downloaded[i]]
+                        logger.info('entering endgame mode (remaining pieces: %s)',
+                                    ', '.join(map(str, non_finished_pieces)))
+                    self._endgame_mode = True
+
+                    # TODO: maybe use some signals instead of sleeping
+                    logger.debug('no requests to process, sleeping')
+                    await asyncio.sleep(TorrentManager.NO_REQUESTS_SLEEP_TIME)
+                    continue
+
+                if new_performer is not None:
+                    performer = new_performer
             except NotEnoughPeersError:
                 if not processed_requests:
                     # TODO: Request more peers in some cases (but not too often)
                     #       It should be implemented in announce task, that must wake up this task on case of new peers
                     # TODO: Maybe start another piece?
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(TorrentManager.NO_PEERS_SLEEP_TIME)
                     continue
-                else:
-                    performing_peer = None
+
+            if performer is not None:
+                self._peers_busy.add(performer)
 
             expected_futures = [request.downloaded for request in processed_requests]
-            futures_done, futures_pending = await asyncio.wait(expected_futures,
-                                                               return_when=asyncio.FIRST_COMPLETED, timeout=5)
+            if self._endgame_mode:
+                request_timeout = TorrentManager.REQUEST_TIMEOUT_ENDGAME
+            else:
+                request_timeout = TorrentManager.REQUEST_TIMEOUT
+            futures_done, futures_pending = await asyncio.wait(expected_futures, return_when=asyncio.FIRST_COMPLETED,
+                                                               timeout=request_timeout)
+
+            if performer is not None:
+                self._peers_busy.remove(performer)
 
             if len(futures_pending) < len(expected_futures):
-                if performing_peer is not None:
-                    self._peers_busy.remove(performing_peer)
-
                 for fut in futures_done:
                     piece_index = future_to_request[fut].piece_index
                     if (not download_info.piece_downloaded[piece_index] and
@@ -941,18 +983,19 @@ class TorrentManager:
                         await self._validate_piece(piece_index)
 
                     del future_to_request[fut]
-                processed_requests = [future_to_request[fut] for fut in futures_pending]
+                processed_requests.clear()
+                processed_requests += [future_to_request[fut] for fut in futures_pending]
             else:
+                logger.debug('peer %s hanged, leaving it alone for a while', performer)
+                self._peer_hanged_time[performer] = time.time()
+                # Sometimes here a new performer can be marked as hanged instead of an old performer.
+                # It's normal, because in following requests the old performer will be marked as hanged too
+                # (and the new performer will be unlocked soon).
+
                 for fut in futures_pending:
                     self._request_deque.appendleft(future_to_request[fut])
                     del future_to_request[fut]
-                processed_requests = []
-
-                logger.debug('requests failed, sleeping')
-                await asyncio.sleep(5)
-
-                if performing_peer is not None:
-                    self._peers_busy.remove(performing_peer)
+                processed_requests.clear()
 
     async def download(self):
         download_info = self._torrent_info.download_info
@@ -968,14 +1011,15 @@ class TorrentManager:
         logger.debug('starting client executors')
         self._client_executors = []
         for peer in peers_to_connect:
-            # FIXME: don't connect to our own server (compare peer_ids?)
             client = PeerTCPClient(self._torrent_info.download_info, self._file_structure,
                                    self._our_peer_id, peer)
             self._client_executors.append(asyncio.ensure_future(self._execute_peer_client(peer, client)))
 
         logger.debug('starting request executors')
-        self._request_executors = [asyncio.ensure_future(self._execute_block_requests())
-                                   for _ in range(TorrentManager.DOWNLOAD_PEER_COUNT)]
+        for _ in range(TorrentManager.DOWNLOAD_PEER_COUNT):
+            processed_requests = []
+            self._executors_processed_requests.append(processed_requests)
+            self._request_executors.append(asyncio.ensure_future(self._execute_block_requests(processed_requests)))
         await asyncio.wait(self._request_executors)
 
         # TODO: announces, upload
@@ -990,6 +1034,7 @@ class TorrentManager:
         if self._request_executors:
             await asyncio.wait(self._request_executors)
         self._request_executors.clear()
+        self._executors_processed_requests.clear()
 
         for task in self._client_executors:
             task.cancel()
