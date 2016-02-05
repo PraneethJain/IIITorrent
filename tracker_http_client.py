@@ -1,7 +1,7 @@
 import logging
 import re
 from collections import OrderedDict
-from typing import List, Optional, cast
+from typing import List, Optional, cast, Sequence
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
@@ -52,17 +52,27 @@ class TrackerHTTPClient:
         if b'incomplete' in response:
             self.leech_count = response[b'incomplete']
 
-    def announce(self, uploaded: int, downloaded: int, left: int, event: str):
+    BYTES_PER_MIB = 2 ** 20
+
+    def announce(self, event: Optional[str]):
+        download_info = self._torrent_info.download_info
+
+        logger.debug('announce %s (uploaded = %.1f MiB, downloaded = %.1f MiB, left = %.1f MiB)', event,
+                     download_info.total_uploaded / TrackerHTTPClient.BYTES_PER_MIB,
+                     download_info.total_downloaded / TrackerHTTPClient.BYTES_PER_MIB,
+                     download_info.bytes_left / TrackerHTTPClient.BYTES_PER_MIB)
+
         params = {
-            'info_hash': self._torrent_info.download_info.info_hash,
+            'info_hash': download_info.info_hash,
             'peer_id': self._our_peer_id,
             'port': 6881,  # FIXME:
-            'uploaded': uploaded,
-            'downloaded': downloaded,
-            'left': left,
-            'event': event,
+            'uploaded': download_info.total_uploaded,
+            'downloaded': download_info.total_downloaded,
+            'left': download_info.bytes_left,
             'compact': 1,
         }
+        if event is not None:
+            params['event'] = event
         if self._tracker_id is not None:
             params['trackerid'] = self._tracker_id
 
@@ -70,6 +80,7 @@ class TrackerHTTPClient:
         conn = urlopen(url)
         response = cast(OrderedDict, bencodepy.decode(conn.read()))
         conn.close()
+        # FIXME: handle exceptions, use aiohttp
 
         if b'failure reason' in response:
             raise TrackerError(response[b'failure reason'].decode())
@@ -82,11 +93,12 @@ class TrackerHTTPClient:
 
         peers = response[b'peers']
         if isinstance(peers, bytes):
-            peers = TrackerHTTPClient._parse_compact_peers_list(peers)
+            self._peers = TrackerHTTPClient._parse_compact_peers_list(peers)
         else:
-            peers = list(map(Peer.from_dict, peers))
-        self._peers = self._peers.union(peers)
+            self._peers = list(map(Peer.from_dict, peers))
+
+        logger.debug('%s peers, interval = %s, min_interval = %s', len(self._peers), self.interval, self.min_interval)
 
     @property
-    def peers(self) -> set:
+    def peers(self) -> Sequence[Peer]:
         return self._peers

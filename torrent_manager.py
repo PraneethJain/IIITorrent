@@ -3,7 +3,7 @@ import hashlib
 import logging
 import random
 from collections import deque
-from typing import Dict, List, MutableSet, Tuple
+from typing import Dict, List, MutableSet, Optional, Tuple, Sequence
 
 import contexttimer
 import time
@@ -55,6 +55,7 @@ class TorrentManager:
         self._client_executors = []              # type: List[asyncio.Task]
         self._request_executors = []             # type: List[asyncio.Task]
         self._executors_processed_requests = []  # type: List[List[BlockRequest]]
+        self._announcement_executor = None       # type: Optional[asyncio.Task]
 
         self._non_started_pieces = None   # type: List[int]
         self._request_deque = deque()
@@ -343,36 +344,63 @@ class TorrentManager:
             self._peers_busy.remove(cur_performer)
             prev_performer = cur_performer
 
+    MAX_PEERS_TO_CONNECT = 30
+    MAX_PEERS_TO_ACCEPT = 55
+
+    def _connect_to_peers(self, peers: Sequence[Peer]):
+        peers = list({peer for peer in peers if peer not in self._peer_clients})
+        peers_to_connect_count = max(TorrentManager.MAX_PEERS_TO_CONNECT - len(self._peer_clients), 0)
+        logger.debug('connecting to %s new peers', min(len(peers), peers_to_connect_count))
+
+        for peer in peers[:peers_to_connect_count]:
+            client = PeerTCPClient(self._torrent_info.download_info, self._file_structure,
+                                   self._our_peer_id, peer)
+            self._client_executors.append(asyncio.ensure_future(self._execute_peer_client(peer, client)))
+
+    async def _execute_regular_announcements(self):
+        download_info = self._torrent_info.download_info
+
+        download_complete = download_info.complete
+        try:
+            while True:
+                await asyncio.sleep(self._tracker_client.interval)
+
+                if not download_complete and download_info.complete:
+                    download_complete = True
+                    event = 'completed'
+                else:
+                    event = None
+                self._tracker_client.announce(event)
+                self._connect_to_peers(self._tracker_client.peers)
+        finally:
+            self._tracker_client.announce('stopped')
+
     async def download(self):
         download_info = self._torrent_info.download_info
 
         self._non_started_pieces = list(range(download_info.piece_count))
         random.shuffle(self._non_started_pieces)
 
-        logger.debug('announce start')
-        self._tracker_client.announce(0, 0, download_info.total_size, 'started')
-        peers_to_connect = list(self._tracker_client.peers)
-        # FIXME: handle exceptions, use aiohttp
+        self._tracker_client.announce('started')
+        self._connect_to_peers(self._tracker_client.peers)
 
-        logger.debug('starting client executors')
-        self._client_executors = []
-        for peer in peers_to_connect:
-            client = PeerTCPClient(self._torrent_info.download_info, self._file_structure,
-                                   self._our_peer_id, peer)
-            self._client_executors.append(asyncio.ensure_future(self._execute_peer_client(peer, client)))
-
-        logger.debug('starting request executors')
         for _ in range(TorrentManager.DOWNLOAD_PEER_COUNT):
             processed_requests = []
             self._executors_processed_requests.append(processed_requests)
             self._request_executors.append(asyncio.ensure_future(self._execute_block_requests(processed_requests)))
         await asyncio.wait(self._request_executors)
 
-        # TODO: announces, upload
+        self._announcement_executor = asyncio.ensure_future(self._execute_regular_announcements())
+
+        # TODO: upload
 
         logger.info('file download complete')
 
     async def stop(self):
+        self._announcement_executor.cancel()
+        await asyncio.wait([self._announcement_executor])
+        self._announcement_executor = None
+
         for task in self._request_executors:
             task.cancel()
         if self._request_executors:

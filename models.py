@@ -94,6 +94,9 @@ class DownloadInfo:
         self._piece_block_downloaded = [None] * piece_count * blocks_per_piece  # type: List[Optional[bitarray]]
         self._piece_blocks_expected = [set() for _ in range(piece_count)]
 
+        self.total_uploaded = 0
+        self.total_downloaded = 0
+
     @classmethod
     def from_dict(cls, dictionary: OrderedDict):
         info_hash = hashlib.sha1(bencodepy.encode(dictionary)).digest()
@@ -124,6 +127,18 @@ class DownloadInfo:
     @property
     def total_size(self) -> int:
         return sum(file.length for file in self.files)
+
+    @property
+    def bytes_left(self) -> int:
+        result = (self.piece_count - self.downloaded_piece_count) * self.piece_length
+        last_piece_index = self.piece_count - 1
+        if not self.piece_downloaded[last_piece_index]:
+            result += self.get_real_piece_length(last_piece_index) - self.piece_length
+        return result
+
+    @property
+    def complete(self):
+        return self.downloaded_piece_count == self.piece_count
 
     @property
     def piece_owners(self) -> List[MutableSet[Peer]]:

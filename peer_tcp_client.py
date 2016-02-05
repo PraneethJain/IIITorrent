@@ -237,6 +237,7 @@ class PeerTCPClient:
         self._send_message(MessageType.piece, struct.pack('!2I', piece_index, begin), block)
 
         self._uploaded += length
+        self._download_info.total_uploaded += length
 
     async def _process_requests(self, message_id: MessageType, payload: memoryview):
         piece_index, begin, length = struct.unpack('!3I', cast(bytes, payload))
@@ -275,6 +276,7 @@ class PeerTCPClient:
             return
 
         self._downloaded += length
+        self._download_info.total_downloaded += length
 
         with contexttimer.Timer() as timer:
             self._file_structure.write(piece_index * self._download_info.piece_length + begin, block)
