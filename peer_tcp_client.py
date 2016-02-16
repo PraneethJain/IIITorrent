@@ -335,7 +335,8 @@ class PeerTCPClient:
 
     def send_request(self, request: BlockRequest, cancel: bool=False):
         self._check_position_range(request)
-        assert self._peer in self._download_info.piece_owners[request.piece_index]
+        if not cancel:
+            assert self._peer in self._download_info.piece_owners[request.piece_index]
 
         self._send_message(MessageType.request if not cancel else MessageType.cancel,
                            struct.pack('!3I', request.piece_index, request.block_begin, request.block_length))

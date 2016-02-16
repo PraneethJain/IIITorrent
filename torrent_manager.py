@@ -5,6 +5,7 @@ import logging
 import random
 import time
 from collections import deque, OrderedDict
+from math import ceil
 from typing import Dict, List, Optional, Tuple, Sequence, Iterable, cast, Iterator
 
 from file_structure import FileStructure
@@ -46,15 +47,13 @@ class TorrentManager:
         self._request_executors = []             # type: List[asyncio.Task]
         self._executors_processed_requests = []  # type: List[List[BlockRequestFuture]]
 
-        self._non_started_pieces = None  # type: List[int]
+        self._non_started_pieces = None   # type: List[int]
+        self._download_start_time = None  # type: float
 
         self._piece_block_queue = OrderedDict()
         self._peer_queue_size = {}  # type: Dict[Peer, int]
 
-        self._request_consumption_lock = asyncio.Lock()
         self._endgame_mode = False
-        # TODO: Send cancels in endgame mode
-
         self._tasks_waiting_for_more_peers = 0
         self._more_peers_requested = asyncio.Event()
         self._request_deque_relevant = asyncio.Event()
@@ -141,9 +140,9 @@ class TorrentManager:
         for peer in piece_owners:
             self._peer_clients[peer].am_interested = True
 
-        logger.debug('piece %s started (owned by %s alive peers, concurrency: %s pieces, %s peers)',
-                     piece_index, len(piece_owners), len(self._download_info.interesting_pieces),
-                     sum(1 for peer, size in self._peer_queue_size.items() if size))
+        concurrent_peers_count = sum(1 for peer, size in self._peer_queue_size.items() if size)
+        logger.debug('piece %s started (owned by %s alive peers, concurrency: %s peers)',
+                     piece_index, len(piece_owners), concurrent_peers_count)
 
     def _finish_downloading_piece(self, piece_index: int):
         self._flush_piece(piece_index)
@@ -215,6 +214,7 @@ class TorrentManager:
 
         return rate
 
+    DOWNLOAD_PEER_COUNT = 15
     DOWNLOAD_REQUEST_QUEUE_SIZE = 10
 
     def _is_peer_free(self, peer: Peer):
@@ -252,14 +252,14 @@ class TorrentManager:
 
     RAREST_PIECE_COUNT_TO_SELECT = 10
 
-    def _select_new_piece(self) -> Optional[int]:
+    def _select_new_piece(self, *, force: bool) -> Optional[int]:
         piece_owners = self._download_info.piece_owners
 
         available_pieces = []
         for piece_index in self._non_started_pieces:
             available = False
             for peer in piece_owners[piece_index]:
-                if not self._peer_clients[peer].peer_choking and self._is_peer_free(peer):
+                if (force or not self._peer_clients[peer].peer_choking) and self._is_peer_free(peer):
                     available = True
                     break
             if available:
@@ -270,6 +270,11 @@ class TorrentManager:
         available_pieces.sort(key=lambda index: len(piece_owners[index]))
         piece_count_to_select = min(len(available_pieces), TorrentManager.RAREST_PIECE_COUNT_TO_SELECT)
         return available_pieces[random.randint(0, piece_count_to_select - 1)]
+
+    _typical_piece_length = 2 ** 20
+    _requests_per_piece = ceil(_typical_piece_length / REQUEST_LENGTH)
+    _desired_request_stock = DOWNLOAD_PEER_COUNT * DOWNLOAD_REQUEST_QUEUE_SIZE
+    DESIRED_PIECE_STOCK = ceil(_desired_request_stock / _requests_per_piece)
 
     def _request_blocks(self, count: int) -> List[BlockRequestFuture]:
         result = []
@@ -283,7 +288,9 @@ class TorrentManager:
                     return result
 
             with check_time('selecting new piece'):
-                new_piece_index = self._select_new_piece()
+                piece_stock = len(self._piece_block_queue) - len(consumed_pieces)
+                piece_stock_small = (piece_stock < TorrentManager.DESIRED_PIECE_STOCK)
+                new_piece_index = self._select_new_piece(force=piece_stock_small)
             if new_piece_index is not None:
                 self._non_started_pieces.remove(new_piece_index)
                 self._start_downloading_piece(new_piece_index)
@@ -301,9 +308,11 @@ class TorrentManager:
             raise NotEnoughPeersError('No peers to perform a request')
         return result
 
-    DOWNLOAD_PEER_COUNT = 20
     DOWNLOAD_PEERS_ACTIVE_TO_REQUEST_MORE_PEERS = 2
-    NOT_ENOUGH_PEERS_SLEEP_TIME = 5
+
+    NO_PEERS_SLEEP_TIME = 5
+    STARTING_DURATION = 5
+    NO_PEERS_SLEEP_TIME_ON_STARTING = 1
 
     async def _wait_more_peers(self):
         self._tasks_waiting_for_more_peers += 1
@@ -312,7 +321,11 @@ class TorrentManager:
                 len(self._peer_clients) < TorrentManager.MAX_PEERS_TO_ACTIVELY_CONNECT:
             self._more_peers_requested.set()
 
-        await asyncio.sleep(TorrentManager.NOT_ENOUGH_PEERS_SLEEP_TIME)
+        if time.time() - self._download_start_time <= TorrentManager.STARTING_DURATION:
+            sleep_time = TorrentManager.NO_PEERS_SLEEP_TIME_ON_STARTING
+        else:
+            sleep_time = TorrentManager.NO_PEERS_SLEEP_TIME
+        await asyncio.sleep(sleep_time)
         self._tasks_waiting_for_more_peers -= 1
 
     def _get_non_finished_pieces(self) -> List[int]:
@@ -333,11 +346,8 @@ class TorrentManager:
     async def _execute_block_requests(self, processed_requests: List[BlockRequestFuture]):
         while True:
             try:
-                async with self._request_consumption_lock:
-                    # TODO: Lock is unused
-                    # TODO: Take one piece if none is taken
-                    free_place_count = TorrentManager.DOWNLOAD_REQUEST_QUEUE_SIZE - len(processed_requests)
-                    processed_requests += self._request_blocks(free_place_count)
+                free_place_count = TorrentManager.DOWNLOAD_REQUEST_QUEUE_SIZE - len(processed_requests)
+                processed_requests += self._request_blocks(free_place_count)
             except NotEnoughPeersError:
                 if not processed_requests:
                     await self._wait_more_peers()
@@ -452,6 +462,7 @@ class TorrentManager:
 
     async def _download(self):
         self._non_started_pieces = self._get_non_finished_pieces()
+        self._download_start_time = time.time()
         if not self._non_started_pieces:
             return
 
