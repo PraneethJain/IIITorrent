@@ -24,6 +24,7 @@ class TrackerHTTPClient:
             raise ValueError('TrackerHTTPClient expects announce_url with HTTP and HTTPS protocol')
 
         self._torrent_info = torrent_info
+        self._download_info = torrent_info.download_info
         self._our_peer_id = our_peer_id
 
         self._session = aiohttp.ClientSession()
@@ -74,20 +75,18 @@ class TrackerHTTPClient:
     BYTES_PER_MIB = 2 ** 20
 
     async def announce(self, event: Optional[str]):
-        download_info = self._torrent_info.download_info
-
         logger.debug('announce %s (uploaded = %.1f MiB, downloaded = %.1f MiB, left = %.1f MiB)', event,
-                     download_info.total_uploaded / TrackerHTTPClient.BYTES_PER_MIB,
-                     download_info.total_downloaded / TrackerHTTPClient.BYTES_PER_MIB,
-                     download_info.bytes_left / TrackerHTTPClient.BYTES_PER_MIB)
+                     self._download_info.total_uploaded / TrackerHTTPClient.BYTES_PER_MIB,
+                     self._download_info.total_downloaded / TrackerHTTPClient.BYTES_PER_MIB,
+                     self._download_info.bytes_left / TrackerHTTPClient.BYTES_PER_MIB)
 
         params = {
-            'info_hash': download_info.info_hash,
+            'info_hash': self._download_info.info_hash,
             'peer_id': self._our_peer_id,
             'port': 6881,  # FIXME:
-            'uploaded': download_info.total_uploaded,
-            'downloaded': download_info.total_downloaded,
-            'left': download_info.bytes_left,
+            'uploaded': self._download_info.total_uploaded,
+            'downloaded': self._download_info.total_downloaded,
+            'left': self._download_info.bytes_left,
             'compact': 1,
         }
         if event is not None:
