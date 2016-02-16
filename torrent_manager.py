@@ -41,6 +41,7 @@ class TorrentManager:
         self._peer_hanged_time = {}              # type: Dict[Peer, float]
 
         self._server = None
+        self._server_port = None                 # type: Optional[int]
         self._client_executors = []              # type: List[asyncio.Task]
         self._keeping_alive_executor = None      # type: Optional[asyncio.Task]
         self._announcement_executor = None       # type: Optional[asyncio.Task]
@@ -139,11 +140,15 @@ class TorrentManager:
         choking_owners = [peer for peer in piece_owners if self._peer_clients[peer].peer_choking]
         if len(choking_owners) == len(piece_owners) and choking_owners:
             logger.debug('all piece owners are choking us yet, waiting for an answer for am_interested')
-            _, pending = await asyncio.wait([self._peer_clients[peer].drain() for peer in choking_owners],
-                                            timeout=TorrentManager.FLAG_TRANSMISSION_TIMEOUT)
-            # FIXME: iterate "done" to handle exceptions that can be raised by drain()
+            done, pending = await asyncio.wait([self._peer_clients[peer].drain() for peer in choking_owners],
+                                               timeout=TorrentManager.FLAG_TRANSMISSION_TIMEOUT)
+            for fut in done:
+                if fut.exception() is not None:
+                    logger.debug('draining failed with %s', repr(fut.exception()))
+            for fut in pending:
+                fut.cancel()
+
             await asyncio.sleep(TorrentManager.FLAG_TRANSMISSION_TIMEOUT)
-        # TODO: What if there's no alive_piece_owners?
 
         logger.debug('piece %s started (owned by %s alive peers, concurrency: %s pieces, %s peers)',
                      piece_index, len(piece_owners), len(self._download_info.interesting_pieces),
@@ -404,7 +409,6 @@ class TorrentManager:
 
     async def _accept_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         if len(self._peer_clients) >= TorrentManager.MAX_PEERS_TO_ACCEPT:
-            # FIXME: reject connection earlier?
             writer.close()
             return
         addr = writer.get_extra_info('peername')
@@ -415,11 +419,13 @@ class TorrentManager:
         self._client_executors.append(asyncio.ensure_future(self._execute_peer_client(peer, client,
                                                                                       (reader, writer))))
 
+    FAKE_SERVER_PORT = 6881
     DEFAULT_MIN_INTERVAL = 30
 
     async def _try_to_announce(self, event: Optional[str]) -> bool:
         try:
-            await self._tracker_client.announce(event)
+            server_port = self._server_port if self._server_port is not None else TorrentManager.FAKE_SERVER_PORT
+            await self._tracker_client.announce(server_port, event)
             return True
         except asyncio.CancelledError:
             raise
@@ -551,6 +557,7 @@ class TorrentManager:
             except Exception as e:
                 logger.debug('exception on server starting on port %s: %s', port, repr(e))
             else:
+                self._server_port = port
                 logger.debug('server started on port %s', port)
                 break
         else:

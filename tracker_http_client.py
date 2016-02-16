@@ -74,7 +74,7 @@ class TrackerHTTPClient:
 
     BYTES_PER_MIB = 2 ** 20
 
-    async def announce(self, event: Optional[str]):
+    async def announce(self, server_port: int, event: Optional[str]):
         logger.debug('announce %s (uploaded = %.1f MiB, downloaded = %.1f MiB, left = %.1f MiB)', event,
                      self._download_info.total_uploaded / TrackerHTTPClient.BYTES_PER_MIB,
                      self._download_info.total_downloaded / TrackerHTTPClient.BYTES_PER_MIB,
@@ -83,7 +83,7 @@ class TrackerHTTPClient:
         params = {
             'info_hash': self._download_info.info_hash,
             'peer_id': self._our_peer_id,
-            'port': 6881,  # FIXME:
+            'port': server_port,
             'uploaded': self._download_info.total_uploaded,
             'downloaded': self._download_info.total_downloaded,
             'left': self._download_info.bytes_left,

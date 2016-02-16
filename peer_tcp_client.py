@@ -300,7 +300,6 @@ class PeerTCPClient:
             if message is None:
                 continue
             message_id, payload = message
-            # FIXME: send keep-alives (or do it in another Task)
 
             if message_id in (MessageType.choke, MessageType.unchoke,
                               MessageType.interested, MessageType.not_interested):
