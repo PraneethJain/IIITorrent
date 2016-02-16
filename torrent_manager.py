@@ -4,12 +4,12 @@ import logging
 import random
 import time
 from collections import deque
-from typing import Dict, List, MutableSet, Optional, Tuple, Sequence, Iterable
+from typing import Dict, List, MutableSet, Optional, Tuple, Sequence
 
 import contexttimer
 
 from file_structure import FileStructure
-from models import Peer, TorrentInfo
+from models import BlockRequest, Peer, TorrentInfo
 from peer_tcp_client import PeerTCPClient
 from tracker_http_client import TrackerHTTPClient
 
@@ -18,22 +18,6 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 TIMER_WARNING_THRESHOLD_MS = 50
-
-
-class BlockRequest:
-    def __init__(self, piece_index: int, block_begin: int, block_length: int, downloaded: asyncio.Future):
-        self.piece_index = piece_index
-        self.block_begin = block_begin
-        self.block_length = block_length
-        self.downloaded = downloaded
-
-    @property
-    def block_info(self) -> Tuple[int, int, asyncio.Future]:
-        return self.block_begin, self.block_length, self.downloaded
-
-    @property
-    def client_request(self) -> Tuple[int, int, int]:
-        return self.piece_index, self.block_begin, self.block_length
 
 
 class NotEnoughPeersError(RuntimeError):
@@ -117,7 +101,7 @@ class TorrentManager:
             block_length = block_end - block_begin
             request = BlockRequest(piece_index, block_begin, block_length, asyncio.Future())
 
-            blocks_expected.add(request.block_info)
+            blocks_expected.add(request)
             self._request_deque.append(request)
 
         download_info.interesting_pieces.add(piece_index)
@@ -257,7 +241,7 @@ class TorrentManager:
             processed_requests.append(request)
             future_to_request[request.downloaded] = request
 
-            client.send_request(*request.client_request)
+            client.send_request(request)
 
             if (len(processed_requests) == TorrentManager.DOWNLOAD_REQUEST_QUEUE_SIZE or
                     not await self._prepare_requests()):

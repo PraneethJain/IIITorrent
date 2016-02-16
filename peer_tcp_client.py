@@ -9,8 +9,7 @@ import contexttimer
 from bitarray import bitarray
 
 from file_structure import FileStructure
-from models import DownloadInfo, Peer, SHA1_DIGEST_LEN
-
+from models import DownloadInfo, Peer, SHA1_DIGEST_LEN, BlockRequest
 
 CLIENT_LOGGER_LEVEL = logging.INFO
 
@@ -225,24 +224,28 @@ class PeerTCPClient:
 
     MAX_REQUEST_LENGTH = 2 ** 17
 
-    def _check_position_range(self, piece_index: int, begin: int, length: int):
-        if piece_index < 0 or piece_index >= self._download_info.piece_count:
+    def _check_position_range(self, request: BlockRequest):
+        if request.piece_index < 0 or request.piece_index >= self._download_info.piece_count:
             raise IndexError('Piece index out of range')
-        if (begin < 0 or begin + length > self._download_info.piece_length or
-                piece_index * self._download_info.piece_length + begin + length > self._download_info.total_size):
+        end_offset = request.piece_index * self._download_info.piece_length + \
+            request.block_begin + request.block_length
+        if (request.block_begin < 0 or request.block_begin + request.block_length > self._download_info.piece_length or
+                end_offset > self._download_info.total_size):
             raise IndexError('Position in piece out of range')
 
-    def _send_block(self, piece_index: int, begin: int, length: int):
-        block = self._file_structure.read(piece_index * self._download_info.piece_length + begin, length)
+    def _send_block(self, request: BlockRequest):
+        block = self._file_structure.read(
+            request.piece_index * self._download_info.piece_length + request.block_begin, request.block_length)
 
-        self._send_message(MessageType.piece, struct.pack('!2I', piece_index, begin), block)
+        self._send_message(MessageType.piece, struct.pack('!2I', request.piece_index, request.block_begin), block)
 
-        self._uploaded += length
-        self._download_info.total_uploaded += length
+        self._uploaded += request.block_length
+        self._download_info.total_uploaded += request.block_length
 
     async def _process_requests(self, message_id: MessageType, payload: memoryview):
         piece_index, begin, length = struct.unpack('!3I', cast(bytes, payload))
-        self._check_position_range(piece_index, begin, length)
+        request = BlockRequest(piece_index, begin, length, None)
+        self._check_position_range(request)
 
         if message_id == MessageType.request:
             if length > PeerTCPClient.MAX_REQUEST_LENGTH:
@@ -258,7 +261,7 @@ class PeerTCPClient:
             # or that there's not requested too many blocks?
             # FIXME: Check here if block hasn't been cancelled. We need sure that cancel message can be received
             # FIXME: (run this as a task? avoid DoS in implementing; we should can receive and send "simultaneously")
-            self._send_block(piece_index, begin, length)
+            self._send_block(request)
         elif message_id == MessageType.cancel:
             pass
 
@@ -268,21 +271,22 @@ class PeerTCPClient:
             return
 
         fmt = '!2I'
-        piece_index, begin = struct.unpack_from(fmt, payload)
-        block = memoryview(payload)[struct.calcsize(fmt):]
-        length = len(block)
-        self._check_position_range(piece_index, begin, length)
+        piece_index, block_begin = struct.unpack_from(fmt, payload)
+        block_data = memoryview(payload)[struct.calcsize(fmt):]
+        block_length = len(block_data)
+        request = BlockRequest(piece_index, block_begin, block_length, None)
+        self._check_position_range(request)
 
-        if self._download_info.piece_downloaded[piece_index] or not length:
+        if self._download_info.piece_downloaded[piece_index] or not block_length:
             return
 
-        self._downloaded += length
-        self._download_info.total_downloaded += length
+        self._downloaded += block_length
+        self._download_info.total_downloaded += block_length
 
         with contexttimer.Timer() as timer:
-            self._file_structure.write(piece_index * self._download_info.piece_length + begin, block)
+            self._file_structure.write(piece_index * self._download_info.piece_length + block_begin, block_data)
 
-            self._download_info.mark_downloaded_blocks(piece_index, begin, length)
+            self._download_info.mark_downloaded_blocks(request)
             self._download_info.piece_sources[piece_index].add(self._peer)
         if timer.elapsed >= TIMER_WARNING_THRESHOLD_MS:
             self._logger.warning('Too long _handle_block (%s ms)', timer.elapsed)
@@ -311,11 +315,12 @@ class PeerTCPClient:
     def send_have(self, piece_index: int):
         self._send_message(MessageType.have, struct.pack('!I', piece_index))
 
-    def send_request(self, piece_index: int, begin: int, length: int):
-        self._check_position_range(piece_index, begin, length)
-        assert self._peer in self._download_info.piece_owners[piece_index]
+    def send_request(self, request: BlockRequest):
+        self._check_position_range(request)
+        assert self._peer in self._download_info.piece_owners[request.piece_index]
 
-        self._send_message(MessageType.request, struct.pack('!3I', piece_index, begin, length))
+        self._send_message(MessageType.request,
+                           struct.pack('!3I', request.piece_index, request.block_begin, request.block_length))
 
     async def drain(self):
         await self._writer.drain()

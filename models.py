@@ -5,7 +5,7 @@ import socket
 import struct
 from collections import OrderedDict
 from math import ceil
-from typing import List, MutableSet, MutableSequence, Tuple, cast, Optional
+from typing import List, MutableSet, MutableSequence, cast, Optional
 
 import bencodepy
 from bitarray import bitarray
@@ -63,6 +63,22 @@ class FileInfo:
         return cls(dictionary[b'length'], path, md5sum=dictionary.get(b'md5sum'))
 
 
+class BlockRequest:
+    def __init__(self, piece_index: int, block_begin: int, block_length: int, downloaded: Optional[asyncio.Future]):
+        self.piece_index = piece_index
+        self.block_begin = block_begin
+        self.block_length = block_length
+        self.downloaded = downloaded
+
+    def __eq__(self, other):
+        if not isinstance(other, BlockRequest):
+            return False
+        return self.__dict__ == other.__dict__
+
+    def __hash__(self):
+        return hash((self.piece_index, self.block_begin, self.block_length, self.downloaded))
+
+
 SHA1_DIGEST_LEN = 20
 
 
@@ -116,7 +132,8 @@ class DownloadInfo:
 
     def reset_run_state(self):
         for requests in self._piece_blocks_expected:
-            requests.clear()
+            if requests is not None:
+                requests.clear()
         self.total_uploaded = 0
         self.total_downloaded = 0
 
@@ -170,40 +187,39 @@ class DownloadInfo:
         self._piece_blocks_expected[index] = set()
 
     @property
-    def piece_blocks_expected(self) -> List[Optional[MutableSet[Tuple[int, int, asyncio.Future]]]]:
+    def piece_blocks_expected(self) -> List[Optional[MutableSet[BlockRequest]]]:
         return self._piece_blocks_expected
 
-    def mark_downloaded_blocks(self, piece_index: int, begin: int, length: int):
-        if self._piece_downloaded[piece_index]:
+    def mark_downloaded_blocks(self, request: BlockRequest):
+        if self._piece_downloaded[request.piece_index]:
             raise ValueError('The piece is already downloaded')
-        real_piece_length = self.get_real_piece_length(piece_index)
+        real_piece_length = self.get_real_piece_length(request.piece_index)
 
-        arr = self._piece_block_downloaded[piece_index]
+        arr = self._piece_block_downloaded[request.piece_index]
         if arr is None:
             arr = bitarray(ceil(real_piece_length / DownloadInfo.MARKED_BLOCK_SIZE))
             arr.setall(False)
-            self._piece_block_downloaded[piece_index] = arr
+            self._piece_block_downloaded[request.piece_index] = arr
         else:
             arr = cast(bitarray, arr)
 
-        mark_begin = ceil(begin / DownloadInfo.MARKED_BLOCK_SIZE)
-        if begin + length == real_piece_length:
+        mark_begin = ceil(request.block_begin / DownloadInfo.MARKED_BLOCK_SIZE)
+        if request.block_begin + request.block_length == real_piece_length:
             mark_end = len(arr)
         else:
-            mark_end = (begin + length) // DownloadInfo.MARKED_BLOCK_SIZE
+            mark_end = (request.block_begin + request.block_length) // DownloadInfo.MARKED_BLOCK_SIZE
         arr[mark_begin:mark_end] = True
 
-        cur_piece_blocks_expected = self._piece_blocks_expected[piece_index]
+        blocks_expected = self._piece_blocks_expected[request.piece_index]
         downloaded_blocks = []
-        for block_info in cur_piece_blocks_expected:
-            begin, length, future = block_info
-            query_begin = begin // DownloadInfo.MARKED_BLOCK_SIZE
-            query_end = ceil((begin + length) / DownloadInfo.MARKED_BLOCK_SIZE)
+        for request in blocks_expected:
+            query_begin = request.block_begin // DownloadInfo.MARKED_BLOCK_SIZE
+            query_end = ceil((request.block_begin + request.block_length) / DownloadInfo.MARKED_BLOCK_SIZE)
             if arr[query_begin:query_end].all():
-                downloaded_blocks.append(block_info)
-                future.set_result(True)
-        for block_info in downloaded_blocks:
-            cur_piece_blocks_expected.remove(block_info)
+                downloaded_blocks.append(request)
+                request.downloaded.set_result(True)
+        for request in downloaded_blocks:
+            blocks_expected.remove(request)
 
     def mark_piece_downloaded(self, index: int):
         if self._piece_downloaded[index]:
