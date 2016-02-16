@@ -5,7 +5,7 @@ import socket
 import struct
 from collections import OrderedDict
 from math import ceil
-from typing import List, MutableSet, cast, Optional
+from typing import List, Set, cast, Optional
 
 import bencodepy
 from bitarray import bitarray
@@ -189,11 +189,11 @@ class DownloadInfo:
         return result
 
     @property
-    def piece_owners(self) -> List[MutableSet[Peer]]:
+    def piece_owners(self) -> List[Set[Peer]]:
         return self._piece_owners
 
     @property
-    def piece_sources(self) -> Optional[List[MutableSet[Peer]]]:
+    def piece_sources(self) -> Optional[List[Set[Peer]]]:
         return self._piece_sources
 
     @property
@@ -212,7 +212,7 @@ class DownloadInfo:
         return self._piece_downloaded & self._piece_selected == self._piece_selected
 
     @property
-    def interesting_pieces(self) -> MutableSet[int]:
+    def interesting_pieces(self) -> Set[int]:
         return self._interesting_pieces
 
     def reset_piece(self, index: int):
@@ -223,7 +223,7 @@ class DownloadInfo:
         self._piece_blocks_expected[index] = set()
 
     @property
-    def piece_blocks_expected(self) -> List[Optional[MutableSet[BlockRequestFuture]]]:
+    def piece_blocks_expected(self) -> List[Optional[Set[BlockRequestFuture]]]:
         return self._piece_blocks_expected
 
     def mark_downloaded_blocks(self, source: Peer, request: BlockRequest):
