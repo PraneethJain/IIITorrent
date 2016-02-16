@@ -409,7 +409,8 @@ class TorrentManager:
             pieces_to_download = range(download_info.piece_count)
         self._pieces_to_download = pieces_to_download
 
-        self._non_started_pieces = list(pieces_to_download)
+        self._non_started_pieces = [index for index in pieces_to_download
+                                    if not download_info.piece_downloaded[index]]
         random.shuffle(self._non_started_pieces)
 
         await self._tracker_client.announce('started')

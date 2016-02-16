@@ -92,8 +92,8 @@ class DownloadInfo:
 
         blocks_per_piece = ceil(piece_length / DownloadInfo.MARKED_BLOCK_SIZE)
         self._piece_block_downloaded = [None] * piece_count * blocks_per_piece  # type: List[Optional[bitarray]]
-        self._piece_blocks_expected = [set() for _ in range(piece_count)]
 
+        self._piece_blocks_expected = [set() for _ in range(self.piece_count)]
         self.total_uploaded = 0
         self.total_downloaded = 0
 
@@ -113,6 +113,12 @@ class DownloadInfo:
         return cls(info_hash,
                    dictionary[b'piece length'], piece_hashes, dictionary[b'name'].decode(), files,
                    private=dictionary.get('private', False))
+
+    def reset_run_state(self):
+        for requests in self._piece_blocks_expected:
+            requests.clear()
+        self.total_uploaded = 0
+        self.total_downloaded = 0
 
     @property
     def piece_count(self) -> int:
