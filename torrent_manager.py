@@ -119,6 +119,15 @@ class TorrentManager:
 
     FLAG_TRANSMISSION_TIMEOUT = 0.5
 
+    def _send_cancels(self, request: BlockRequestFuture):
+        performers = request.prev_performers
+        if request.performer is not None:
+            performers.add(request.performer)
+        source = request.result()
+        for peer in performers - {source}:
+            if peer in self._peer_clients:
+                self._peer_clients[peer].send_request(request, cancel=True)
+
     async def _start_downloading_piece(self, piece_index: int):
         cur_piece_length = self._download_info.get_real_piece_length(piece_index)
         blocks_expected = self._download_info.piece_blocks_expected[piece_index]
@@ -127,6 +136,7 @@ class TorrentManager:
             block_end = min(block_begin + TorrentManager.REQUEST_LENGTH, cur_piece_length)
             block_length = block_end - block_begin
             request = BlockRequestFuture(piece_index, block_begin, block_length)
+            request.add_done_callback(self._send_cancels)
 
             blocks_expected.add(request)
             request_deque.append(request)
@@ -336,7 +346,7 @@ class TorrentManager:
         await self._request_deque_relevant.wait()
 
     REQUEST_TIMEOUT = 6
-    REQUEST_TIMEOUT_ENDGAME = 1.5
+    REQUEST_TIMEOUT_ENDGAME = 1
 
     async def _execute_block_requests(self, processed_requests: List[BlockRequestFuture]):
         while True:
@@ -383,8 +393,9 @@ class TorrentManager:
                 for request in requests_pending:
                     if request.performer in self._peer_clients:
                         self._peer_queue_size[request.performer] -= 1
-
+                        request.prev_performers.add(request.performer)
                     request.performer = None
+
                     self._piece_block_queue.setdefault(request.piece_index, deque()).append(request)
                 processed_requests.clear()
                 self._request_deque_relevant.set()
@@ -474,7 +485,8 @@ class TorrentManager:
         assert self.download_complete
         await self._try_to_announce('completed')
         logger.info('file download complete')
-        # TODO: disconnect from seeders (maybe), connect to new peers, upload
+
+        # TODO: disconnect from seeds, reject incoming connections from seeds, disconnect when a peer becomes a seed
 
     CHOKING_CHANGING_TIME = 10
     UPLOAD_PEER_COUNT = 4

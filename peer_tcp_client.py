@@ -259,10 +259,11 @@ class PeerTCPClient:
                 # could be removed because of file corruption.
                 return
 
-            # FIXME: Check here if block hasn't been cancelled. We need sure that cancel message can be received
             self._send_block(request)
             await self.drain()
         elif message_id == MessageType.cancel:
+            # Now we answer to a request immediately or reject and forget it,
+            # so there's no need to handle cancel messages
             pass
 
     def _handle_block(self, payload: memoryview):
@@ -289,7 +290,7 @@ class PeerTCPClient:
             self._logger.warning('Too long write (%.1f s)', timer.elapsed)
 
         with contexttimer.Timer() as timer:
-            self._download_info.mark_downloaded_blocks(request)
+            self._download_info.mark_downloaded_blocks(self._peer, request)
         if timer.elapsed >= TIMER_WARNING_THRESHOLD:
             self._logger.warning('Too long mark_downloaded_blocks (%.1f s)', timer.elapsed)
         self._download_info.piece_sources[piece_index].add(self._peer)
@@ -324,11 +325,11 @@ class PeerTCPClient:
     def send_have(self, piece_index: int):
         self._send_message(MessageType.have, struct.pack('!I', piece_index))
 
-    def send_request(self, request: BlockRequest):
+    def send_request(self, request: BlockRequest, cancel: bool=False):
         self._check_position_range(request)
         assert self._peer in self._download_info.piece_owners[request.piece_index]
 
-        self._send_message(MessageType.request,
+        self._send_message(MessageType.request if not cancel else MessageType.cancel,
                            struct.pack('!3I', request.piece_index, request.block_begin, request.block_length))
 
     def _send_block(self, request: BlockRequest):

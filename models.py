@@ -83,6 +83,7 @@ class BlockRequestFuture(asyncio.Future, BlockRequest):
         asyncio.Future.__init__(self)
         BlockRequest.__init__(self, piece_index, block_begin, block_length)
 
+        self.prev_performers = set()
         self.performer = None
 
     __eq__ = asyncio.Future.__eq__
@@ -110,6 +111,7 @@ class DownloadInfo:
             raise ValueError('Invalid count of piece hashes')
 
         self._piece_owners = [set() for _ in range(piece_count)]
+
         self._piece_sources = [set() for _ in range(piece_count)]
         self._piece_downloaded = bitarray(piece_count, endian='big')
         self._piece_downloaded.setall(False)
@@ -141,6 +143,9 @@ class DownloadInfo:
                    private=dictionary.get('private', False))
 
     def reset_run_state(self):
+        for owners in self._piece_owners:
+            owners.clear()
+
         self._interesting_pieces.clear()
         for requests in self._piece_blocks_expected:
             if requests is not None:
@@ -201,7 +206,7 @@ class DownloadInfo:
     def piece_blocks_expected(self) -> List[Optional[MutableSet[BlockRequestFuture]]]:
         return self._piece_blocks_expected
 
-    def mark_downloaded_blocks(self, request: BlockRequest):
+    def mark_downloaded_blocks(self, source: Peer, request: BlockRequest):
         if self._piece_downloaded[request.piece_index]:
             raise ValueError('The piece is already downloaded')
         real_piece_length = self.get_real_piece_length(request.piece_index)
@@ -228,7 +233,7 @@ class DownloadInfo:
             query_end = ceil((fut.block_begin + fut.block_length) / DownloadInfo.MARKED_BLOCK_SIZE)
             if arr[query_begin:query_end].all():
                 downloaded_blocks.append(fut)
-                fut.set_result(True)
+                fut.set_result(source)
         for fut in downloaded_blocks:
             blocks_expected.remove(fut)
 
