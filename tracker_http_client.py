@@ -81,7 +81,10 @@ class TrackerHTTPClient:
             response = await conn.read()
         # FIXME: handle exceptions
 
-        response = cast(OrderedDict, bencodepy.decode(response))
+        response = bencodepy.decode(response)
+        if not response:
+            return
+        response = cast(OrderedDict, response)
 
         if b'failure reason' in response:
             raise TrackerError(response[b'failure reason'].decode())
@@ -103,3 +106,6 @@ class TrackerHTTPClient:
     @property
     def peers(self) -> Sequence[Peer]:
         return self._peers
+
+    def close(self):
+        self._session.close()

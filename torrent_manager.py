@@ -358,19 +358,11 @@ class TorrentManager:
             self._client_executors.append(asyncio.ensure_future(self._execute_peer_client(peer, client)))
 
     async def _execute_regular_announcements(self):
-        download_info = self._torrent_info.download_info
-
-        download_complete = download_info.complete
         try:
             while True:
                 await asyncio.sleep(self._tracker_client.interval)
 
-                if not download_complete and download_info.complete:
-                    download_complete = True
-                    event = 'completed'
-                else:
-                    event = None
-                await self._tracker_client.announce(event)
+                await self._tracker_client.announce(None)
                 self._connect_to_peers(self._tracker_client.peers)
         finally:
             await self._tracker_client.announce('stopped')
@@ -388,11 +380,13 @@ class TorrentManager:
             processed_requests = []
             self._executors_processed_requests.append(processed_requests)
             self._request_executors.append(asyncio.ensure_future(self._execute_block_requests(processed_requests)))
-        await asyncio.wait(self._request_executors)
 
         self._announcement_executor = asyncio.ensure_future(self._execute_regular_announcements())
 
-        # TODO: upload
+        await asyncio.wait(self._request_executors)
+
+        await self._tracker_client.announce('completed')
+        # TODO: disconnect from seeders (maybe), connect to new peers, upload
 
         logger.info('file download complete')
 
@@ -413,5 +407,7 @@ class TorrentManager:
         if self._client_executors:
             await asyncio.wait(self._client_executors)
         self._client_executors.clear()
+
+        self._tracker_client.close()
 
         self._file_structure.close()
