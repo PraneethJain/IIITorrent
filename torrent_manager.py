@@ -54,6 +54,7 @@ class TorrentManager:
     def __init__(self, torrent_info: TorrentInfo, our_peer_id: bytes, server_port: Optional[int]):
         self._torrent_info = torrent_info
         self._download_info = torrent_info.download_info
+        self._download_info.reset_run_state()
         self._our_peer_id = our_peer_id
         self._server_port = server_port
 
@@ -84,10 +85,6 @@ class TorrentManager:
         self._request_deque_relevant = asyncio.Event()
 
         self._file_structure = FileStructure(torrent_info.download_dir, torrent_info.download_info)
-
-    @property
-    def torrent_info(self) -> TorrentInfo:
-        return self._torrent_info
 
     async def _execute_peer_client(self, peer: Peer, client: PeerTCPClient, *, need_connect: bool):
         try:
@@ -567,8 +564,6 @@ class TorrentManager:
             await asyncio.sleep(TorrentManager.CHOKING_CHANGING_TIME)
 
             prev_unchoked_peers = cur_unchoked_peers
-
-    SERVER_PORT_RANGE = range(6881, 6889 + 1)
 
     ANNOUNCE_FAILED_SLEEP_TIME = 3
 

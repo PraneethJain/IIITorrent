@@ -7,6 +7,7 @@ import signal
 import sys
 
 from control_manager import ControlManager
+from control_server import ControlServer
 from models import TorrentInfo
 
 
@@ -34,6 +35,9 @@ def main():
             torrent_info = TorrentInfo.from_file(arg, download_dir=DOWNLOAD_DIR)
             control.add(torrent_info)
 
+    control_server = ControlServer(control)
+    loop.run_until_complete(control_server.start())
+
     stopping = False
 
     def stop_handler():
@@ -42,7 +46,7 @@ def main():
             return
         stopping = True
 
-        stop_task = asyncio.ensure_future(control.stop())
+        stop_task = asyncio.ensure_future(asyncio.wait([control_server.stop(), control.stop()]))
         stop_task.add_done_callback(lambda fut: loop.stop())
 
     for sig in (signal.SIGINT, signal.SIGTERM):

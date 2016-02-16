@@ -42,7 +42,7 @@ class PeerTCPServer:
     PORT_RANGE = range(6881, 6889 + 1)
 
     async def start(self):
-        for port in TorrentManager.SERVER_PORT_RANGE:
+        for port in PeerTCPServer.PORT_RANGE:
             try:
                 self._server = await asyncio.start_server(self._accept, port=port)
             except asyncio.CancelledError:

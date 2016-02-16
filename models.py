@@ -299,6 +299,8 @@ class TorrentInfo:
 
         self.download_dir = download_dir
 
+        self.paused = False
+
     @classmethod
     def from_file(cls, filename: str, **kwargs):
         dictionary = cast(OrderedDict, bencodepy.decode_from_file(filename))
