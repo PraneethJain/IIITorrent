@@ -7,8 +7,7 @@ import aiohttp
 import bencodepy
 
 from models import TorrentInfo, Peer
-from utils import grouper
-
+from utils import grouper, humanize_size
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -72,13 +71,11 @@ class TrackerHTTPClient:
 
     REQUEST_TIMEOUT = 5
 
-    BYTES_PER_MIB = 2 ** 20
-
     async def announce(self, server_port: int, event: Optional[str]):
-        logger.debug('announce %s (uploaded = %.1f MiB, downloaded = %.1f MiB, left = %.1f MiB)', event,
-                     self._download_info.total_uploaded / TrackerHTTPClient.BYTES_PER_MIB,
-                     self._download_info.total_downloaded / TrackerHTTPClient.BYTES_PER_MIB,
-                     self._download_info.bytes_left / TrackerHTTPClient.BYTES_PER_MIB)
+        logger.debug('announce %s (uploaded = %s, downloaded = %s, left = %s)', event,
+                     humanize_size(self._download_info.uploaded_per_session),
+                     humanize_size(self._download_info.downloaded_per_session),
+                     humanize_size(self._download_info.bytes_left))
 
         params = {
             'info_hash': self._download_info.info_hash,

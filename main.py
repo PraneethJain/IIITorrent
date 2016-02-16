@@ -12,7 +12,7 @@ from control_client import ControlClient
 from control_manager import ControlManager
 from control_server import ControlServer
 from models import TorrentInfo
-
+from utils import humanize_size, humanize_speed
 
 DOWNLOAD_DIR = 'downloads'
 
@@ -91,14 +91,56 @@ async def remove_handler(args):
     await delegate_to_control(partial(ControlManager.remove, info_hash=torrent_info.download_info.info_hash))
 
 
+PROGRESS_BAR_WIDTH = 50
+
+
+def format_torrent_info(torrent_info: TorrentInfo):
+    download_info = torrent_info.download_info
+    result = 'Name: {}\n'.format(download_info.suggested_name)
+    result += 'ID: {}\n'.format(download_info.info_hash.hex())
+
+    if torrent_info.paused:
+        state = 'Paused'
+    elif download_info.is_complete():
+        state = 'Uploading'
+    else:
+        state = 'Downloading'
+    result += 'State: {}\n'.format(state)
+
+    result += 'Download from: {}/{} peers\t'.format(download_info.downloading_peer_count, download_info.peer_count)
+    result += 'Upload to: {}/{} peers\n'.format(download_info.uploading_peer_count, download_info.peer_count)
+
+    result += 'Download speed: {}\t'.format(
+        humanize_speed(download_info.download_speed) if download_info.download_speed is not None else 'unknown')
+    result += 'Upload speed: {}\n'.format(
+        humanize_speed(download_info.upload_speed) if download_info.download_speed is not None else 'unknown')
+
+    last_piece_length = download_info.get_real_piece_length(download_info.piece_count - 1)
+    downloaded_size = download_info.downloaded_piece_count * download_info.piece_length
+    if download_info.piece_downloaded[-1]:
+        downloaded_size += last_piece_length - download_info.piece_length
+    selected_size = download_info.piece_selected.count() * download_info.piece_length
+    if download_info.piece_selected[-1]:
+        selected_size += last_piece_length - download_info.piece_length
+    result += 'Size: {}/{}\t'.format(humanize_size(downloaded_size), humanize_size(selected_size))
+
+    if download_info.total_downloaded:
+        ratio = download_info.total_uploaded / download_info.total_downloaded
+    else:
+        ratio = 0
+    result += 'Ratio: {:.1f}\n'.format(ratio)
+
+    progress = downloaded_size / selected_size
+    progress_bar = ('#' * round(progress * PROGRESS_BAR_WIDTH)).ljust(PROGRESS_BAR_WIDTH)
+    result += 'Progress: {:5.1f}% [{}]\n'.format(progress * 100, progress_bar)
+
+    return result
+
+
 async def status_handler(args):
     torrent_list = await delegate_to_control(ControlManager.get_torrents)
-    torrent_list.sort(key=lambda torrent_info: torrent_info.download_info.suggested_name)
-    for torrent_info in torrent_list:
-        download_info = torrent_info.download_info
-        selected_piece_count = download_info.piece_selected.count()
-        progress = download_info.downloaded_piece_count / selected_piece_count
-        print('{} - {:.1f}%'.format(torrent_info.download_info.suggested_name, progress * 100))
+    torrent_list.sort(key=lambda item: item.download_info.suggested_name)
+    print('\n'.join(map(format_torrent_info, torrent_list)), end='')
 
 
 def main():
@@ -132,6 +174,8 @@ def main():
     try:
         arguments = parser.parse_args()
         arguments.func(arguments)
+    except Exception as e:
+        print('Critical error: {}'.format(e), file=sys.stderr)
     finally:
         loop.close()
 

@@ -56,10 +56,12 @@ class ControlServer:
                     result = e
 
                 ControlServer.send_object(result, writer)
+        except asyncio.IncompleteReadError:
+            pass
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.info('%s disconnected because of %s', addr_repr, repr(e))
+            logger.warning('%s disconnected because of %s', addr_repr, repr(e))
         finally:
             writer.close()
 

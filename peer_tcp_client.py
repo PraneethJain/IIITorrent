@@ -310,7 +310,7 @@ class PeerTCPClient:
                 return
 
             self._downloaded += block_length
-            self._download_info.total_downloaded += block_length
+            self._download_info.add_downloaded(self._peer, block_length)
 
             await self._file_structure.write(piece_index * self._download_info.piece_length + block_begin, block_data,
                                              acquire_lock=False)
@@ -364,7 +364,7 @@ class PeerTCPClient:
         self._send_message(MessageType.piece, struct.pack('!2I', request.piece_index, request.block_begin), block)
 
         self._uploaded += request.block_length
-        self._download_info.total_uploaded += request.block_length
+        self._download_info.add_uploaded(self._peer, request.block_length)
 
     async def drain(self):
         await asyncio.wait_for(self._writer.drain(), PeerTCPClient.WRITE_TIMEOUT)

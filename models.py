@@ -3,9 +3,10 @@ import hashlib
 import random
 import socket
 import struct
+import time
 from collections import OrderedDict
 from math import ceil
-from typing import List, Set, cast, Optional
+from typing import List, Set, cast, Optional, Dict
 
 import bencodepy
 from bitarray import bitarray
@@ -136,9 +137,19 @@ class DownloadInfo:
         self._piece_validating = None
         self._interesting_pieces = None
         self._piece_blocks_expected = None
-        self.total_downloaded = None
-        self.total_uploaded = None
         self.reset_run_state()
+
+        self.peer_count = None
+        self._peer_last_download = {}
+        self._peer_last_upload = {}
+        self._downloaded_per_session = None
+        self._uploaded_per_session = None
+        self.download_speed = None
+        self.upload_speed = None
+        self.reset_stats()
+
+        self._total_downloaded = 0
+        self._total_uploaded = 0
 
     def reset_run_state(self):
         self._piece_owners = [set() for _ in range(self.piece_count)]
@@ -146,8 +157,13 @@ class DownloadInfo:
         self._piece_validating.setall(False)
         self._interesting_pieces = set()
         self._piece_blocks_expected = [set() for _ in range(self.piece_count)]
-        self.total_uploaded = 0
-        self.total_downloaded = 0
+
+    def reset_stats(self):
+        self.peer_count = 0
+        self._downloaded_per_session = 0
+        self._uploaded_per_session = 0
+        self.download_speed = None
+        self.upload_speed = None
 
     @classmethod
     def from_dict(cls, dictionary: OrderedDict):
@@ -287,6 +303,55 @@ class DownloadInfo:
     def is_banned(self, peer: Peer) -> bool:
         return (peer.host in self._host_distrust_rates and
                 self._host_distrust_rates[peer.host] >= DownloadInfo.DISTRUST_RATE_TO_BAN)
+
+    @property
+    def peer_last_download(self) -> Dict[Peer, float]:
+        return self._peer_last_download
+
+    @property
+    def peer_last_upload(self) -> Dict[Peer, float]:
+        return self._peer_last_upload
+
+    @property
+    def downloaded_per_session(self) -> int:
+        return self._downloaded_per_session
+
+    @property
+    def uploaded_per_session(self) -> int:
+        return self._uploaded_per_session
+
+    @property
+    def total_downloaded(self) -> int:
+        return self._total_downloaded
+
+    @property
+    def total_uploaded(self) -> int:
+        return self._total_uploaded
+
+    def add_downloaded(self, peer: Peer, size: int):
+        self._peer_last_download[peer] = time.time()
+        self._downloaded_per_session += size
+        self._total_downloaded += size
+
+    def add_uploaded(self, peer: Peer, size: int):
+        self._peer_last_upload[peer] = time.time()
+        self._uploaded_per_session += size
+        self._total_uploaded += size
+
+    PEER_CONSIDERATION_TIME = 10
+
+    @staticmethod
+    def _get_actual_peer_count(time_dict: Dict[Peer, float]):
+        cur_time = time.time()
+        return sum(1 for t in time_dict.values() if cur_time - t <= DownloadInfo.PEER_CONSIDERATION_TIME)
+
+    @property
+    def downloading_peer_count(self):
+        return DownloadInfo._get_actual_peer_count(self._peer_last_download)
+
+    @property
+    def uploading_peer_count(self):
+        return DownloadInfo._get_actual_peer_count(self._peer_last_upload)
 
 
 class TorrentInfo:

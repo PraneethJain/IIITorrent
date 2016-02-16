@@ -6,7 +6,7 @@ from control_manager import ControlManager
 from control_server import ControlServer
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 
 
 T = TypeVar('T')
