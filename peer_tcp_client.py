@@ -257,7 +257,7 @@ class PeerTCPClient:
                 end_offset > self._download_info.total_size):
             raise IndexError('Position in piece out of range')
 
-    async def _process_requests(self, message_id: MessageType, payload: memoryview):
+    async def _handle_requests(self, message_id: MessageType, payload: memoryview):
         piece_index, begin, length = struct.unpack('!3I', cast(bytes, payload))
         request = BlockRequest(piece_index, begin, length)
         self._check_position_range(request)
@@ -274,14 +274,14 @@ class PeerTCPClient:
                 # could be removed because of file corruption.
                 return
 
-            self._send_block(request)
+            await self._send_block(request)
             await self.drain()
         elif message_id == MessageType.cancel:
             # Now we answer to a request immediately or reject and forget it,
             # so there's no need to handle cancel messages
             pass
 
-    def _handle_block(self, payload: memoryview):
+    async def _handle_block(self, payload: memoryview):
         if not self._am_interested:
             # For example, we can be not interested in pieces from peers with big distrust rate
             return
@@ -300,7 +300,7 @@ class PeerTCPClient:
         self._download_info.total_downloaded += block_length
 
         with check_time('write'):
-            self._file_structure.write(piece_index * self._download_info.piece_length + block_begin, block_data)
+            await self._file_structure.write(piece_index * self._download_info.piece_length + block_begin, block_data)
 
         with check_time('marking of downloaded blocks'):
             self._download_info.mark_downloaded_blocks(self._peer, request)
@@ -319,9 +319,9 @@ class PeerTCPClient:
             elif message_id in (MessageType.have, MessageType.bitfield):
                 self._handle_haves(message_id, payload)
             elif message_id in (MessageType.request, MessageType.cancel):
-                await self._process_requests(message_id, payload)
+                await self._handle_requests(message_id, payload)
             elif message_id == MessageType.piece:
-                self._handle_block(payload)
+                await self._handle_block(payload)
             elif message_id == MessageType.port:
                 PeerTCPClient._check_payload_len(message_id, payload, 2)
                 # TODO: Ignore or implement DHT
@@ -344,9 +344,10 @@ class PeerTCPClient:
         self._send_message(MessageType.request if not cancel else MessageType.cancel,
                            struct.pack('!3I', request.piece_index, request.block_begin, request.block_length))
 
-    def _send_block(self, request: BlockRequest):
-        block = self._file_structure.read(
+    async def _send_block(self, request: BlockRequest):
+        block = await self._file_structure.read(
             request.piece_index * self._download_info.piece_length + request.block_begin, request.block_length)
+        # TODO: Maybe can handle cancels here
 
         self._send_message(MessageType.piece, struct.pack('!2I', request.piece_index, request.block_begin), block)
 

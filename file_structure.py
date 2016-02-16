@@ -1,3 +1,5 @@
+import asyncio
+import functools
 import os
 from bisect import bisect_right
 from typing import Iterable, BinaryIO, Tuple
@@ -5,10 +7,21 @@ from typing import Iterable, BinaryIO, Tuple
 from models import DownloadInfo
 
 
+def delegate_to_executor(func):
+    @functools.wraps(func)
+    async def wrapper(self: 'FileStructure', *args, **kwargs):
+        async with self._lock:
+            return await self._loop.run_in_executor(None, functools.partial(func, self, *args, **kwargs))
+
+    return wrapper
+
+
 class FileStructure:
     def __init__(self, download_dir: str, download_info: DownloadInfo):
         self._download_info = download_info
 
+        self._loop = asyncio.get_event_loop()
+        self._lock = asyncio.Lock()
         self._descriptors = []
         self._offsets = []
         offset = 0
@@ -56,13 +69,15 @@ class FileStructure:
             data_length -= bytes_to_operate
             index += 1
 
-    def read(self, offset: int, length: int) -> bytes:
+    @delegate_to_executor
+    def read(self, offset: int, length: int):
         result = []
         for f, file_pos, bytes_to_operate in self._iter_files(offset, length):
             f.seek(file_pos)
             result.append(f.read(bytes_to_operate))
         return b''.join(result)
 
+    @delegate_to_executor
     def write(self, offset: int, data: memoryview):
         for f, file_pos, bytes_to_operate in self._iter_files(offset, len(data)):
             f.seek(file_pos)
@@ -70,6 +85,7 @@ class FileStructure:
 
             data = data[bytes_to_operate:]
 
+    @delegate_to_executor
     def flush(self, offset: int, length: int):
         for f, _, _ in self._iter_files(offset, length):
             f.flush()

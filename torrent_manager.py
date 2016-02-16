@@ -6,7 +6,7 @@ import random
 import time
 from collections import deque, OrderedDict
 from math import ceil
-from typing import Dict, List, Optional, Tuple, Sequence, Iterable, cast, Iterator
+from typing import Dict, List, Optional, Tuple, Sequence, Iterable, cast, Iterator, Set
 
 from file_structure import FileStructure
 from models import BlockRequestFuture, Peer, TorrentInfo
@@ -72,6 +72,7 @@ class TorrentManager:
 
         self._non_started_pieces = None   # type: List[int]
         self._download_start_time = None  # type: float
+        self._validating_pieces = set()   # type: Set[int]
 
         self._piece_block_queue = OrderedDict()
 
@@ -122,10 +123,10 @@ class TorrentManager:
         cur_piece_length = self._download_info.get_real_piece_length(index)
         return piece_offset, cur_piece_length
 
-    def _flush_piece(self, index: int):
+    async def _flush_piece(self, index: int):
         piece_offset, cur_piece_length = self._get_piece_position(index)
         with check_time('flush'):
-            self._file_structure.flush(piece_offset, cur_piece_length)
+            await self._file_structure.flush(piece_offset, cur_piece_length)
 
     FLAG_TRANSMISSION_TIMEOUT = 0.5
 
@@ -162,7 +163,6 @@ class TorrentManager:
                      piece_index, len(piece_owners), concurrent_peers_count)
 
     def _finish_downloading_piece(self, piece_index: int):
-        self._flush_piece(piece_index)
         self._download_info.mark_piece_downloaded(piece_index)
 
         self._download_info.interesting_pieces.remove(piece_index)
@@ -183,14 +183,15 @@ class TorrentManager:
         logger.info('progress %.1lf%% (%s / %s pieces)', progress * 100,
                     self._download_info.downloaded_piece_count, selected_piece_count)
 
-    def _validate_piece(self, piece_index: int):
+    async def _validate_piece(self, piece_index: int):
         assert self._download_info.is_all_piece_blocks_downloaded(piece_index)
 
         piece_offset, cur_piece_length = self._get_piece_position(piece_index)
         with check_time('hash calculation'):
-            data = self._file_structure.read(piece_offset, cur_piece_length)
+            data = await self._file_structure.read(piece_offset, cur_piece_length)
             actual_digest = hashlib.sha1(data).digest()
         if actual_digest == self._download_info.piece_hashes[piece_index]:
+            await self._flush_piece(piece_index)
             self._finish_downloading_piece(piece_index)
             return
 
@@ -383,9 +384,13 @@ class TorrentManager:
                     if request.performer in self._peer_data:
                         self._peer_data[request.performer].queue_size -= 1
 
-                    if not self._download_info.piece_downloaded[request.piece_index] and \
-                            not self._download_info.piece_blocks_expected[request.piece_index]:
-                        self._validate_piece(request.piece_index)
+                    piece_index = request.piece_index
+                    if piece_index not in self._validating_pieces and \
+                            not self._download_info.piece_downloaded[piece_index] and \
+                            not self._download_info.piece_blocks_expected[piece_index]:
+                        self._validating_pieces.add(piece_index)
+                        await self._validate_piece(request.piece_index)
+                        self._validating_pieces.remove(piece_index)
                 processed_requests.clear()
                 processed_requests += list(requests_pending)
             else:
