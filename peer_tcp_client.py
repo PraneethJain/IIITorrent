@@ -27,6 +27,10 @@ class MessageType(Enum):
     port = 9
 
 
+class SeedError(Exception):
+    pass
+
+
 class PeerTCPClient:
     def __init__(self, download_info: DownloadInfo, file_structure: FileStructure, our_peer_id: bytes, peer: Peer):
         self._download_info = download_info
@@ -180,8 +184,7 @@ class PeerTCPClient:
     def piece_owned(self) -> Sequence[bool]:
         return self._piece_owned
 
-    @property
-    def seed(self) -> bool:
+    def is_seed(self) -> bool:
         return self._piece_owned & self._download_info.piece_selected == self._download_info.piece_selected
 
     @property
@@ -240,8 +243,8 @@ class PeerTCPClient:
                 if arr[i]:
                     raise ValueError('Spare bits in "bitfield" message must be zero')
 
-        if self._download_info.complete and self.seed:
-            raise RuntimeError('A seed is disconnected because a download is complete')
+        if self._download_info.is_complete() and self.is_seed():
+            raise SeedError('A seed is disconnected because a download is complete')
 
     MAX_REQUEST_LENGTH = 2 ** 17
 

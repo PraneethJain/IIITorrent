@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Tuple, Sequence, Iterable, cast, Iterat
 
 from file_structure import FileStructure
 from models import BlockRequestFuture, Peer, TorrentInfo
-from peer_tcp_client import PeerTCPClient
+from peer_tcp_client import PeerTCPClient, SeedError
 from tracker_http_client import TrackerHTTPClient
 from utils import check_time
 
@@ -27,6 +27,31 @@ class NoRequestsError(RuntimeError):
     pass
 
 
+DOWNLOAD_REQUEST_QUEUE_SIZE = 10
+
+
+class PeerData:
+    def __init__(self, client: PeerTCPClient, connected_time: float):
+        self._client = client
+        self._connected_time = connected_time
+        self.hanged_time = None  # type: Optional[float]
+        self.queue_size = 0
+
+    @property
+    def client(self) -> PeerTCPClient:
+        return self._client
+
+    @property
+    def connected_time(self) -> float:
+        return self._connected_time
+
+    def is_free(self) -> bool:
+        return self.queue_size < DOWNLOAD_REQUEST_QUEUE_SIZE
+
+    def is_available(self) -> bool:
+        return self.is_free() and not self._client.peer_choking
+
+
 class TorrentManager:
     def __init__(self, torrent_info: TorrentInfo, our_peer_id: bytes, download_dir: str):
         self._torrent_info = torrent_info
@@ -34,9 +59,7 @@ class TorrentManager:
         self._our_peer_id = our_peer_id
 
         self._tracker_client = TrackerHTTPClient(self._torrent_info, self._our_peer_id)
-        self._peer_clients = {}                  # type: Dict[Peer, PeerTCPClient]
-        self._peer_connected_time = {}           # type: Dict[Peer, float]
-        self._peer_hanged_time = {}              # type: Dict[Peer, float]
+        self._peer_data = {}  # type: Dict[Peer, PeerData]
 
         self._server = None
         self._server_port = None                 # type: Optional[int]
@@ -51,7 +74,6 @@ class TorrentManager:
         self._download_start_time = None  # type: float
 
         self._piece_block_queue = OrderedDict()
-        self._peer_queue_size = {}  # type: Dict[Peer, int]
 
         self._endgame_mode = False
         self._tasks_waiting_for_more_peers = 0
@@ -65,9 +87,7 @@ class TorrentManager:
         try:
             await client.connect(streams)
 
-            self._peer_clients[peer] = client
-            self._peer_connected_time[peer] = time.time()
-            self._peer_queue_size[peer] = 0
+            self._peer_data[peer] = PeerData(client, time.time())
 
             try:
                 await client.run()
@@ -77,14 +97,11 @@ class TorrentManager:
                 for owners in self._download_info.piece_owners:
                     if peer in owners:
                         owners.remove(peer)
-
-                del self._peer_clients[peer]
-                del self._peer_connected_time[peer]
-                if peer in self._peer_hanged_time:
-                    del self._peer_hanged_time[peer]
-                del self._peer_queue_size[peer]
+                del self._peer_data[peer]
         except asyncio.CancelledError:
             raise
+        except SeedError:
+            pass
         except Exception as e:
             logger.debug('%s disconnected because of %s', peer, repr(e))
 
@@ -94,9 +111,9 @@ class TorrentManager:
         while True:
             await asyncio.sleep(TorrentManager.KEEP_ALIVE_TIMEOUT)
 
-            logger.debug('broadcasting keep-alives to %s alive peers', len(self._peer_clients))
-            for client in self._peer_clients.values():
-                client.send_keep_alive()
+            logger.debug('broadcasting keep-alives to %s alive peers', len(self._peer_data))
+            for data in self._peer_data.values():
+                data.client.send_keep_alive()
 
     REQUEST_LENGTH = 2 ** 14
 
@@ -118,8 +135,8 @@ class TorrentManager:
             performers.add(request.performer)
         source = request.result()
         for peer in performers - {source}:
-            if peer in self._peer_clients:
-                self._peer_clients[peer].send_request(request, cancel=True)
+            if peer in self._peer_data:
+                self._peer_data[peer].client.send_request(request, cancel=True)
 
     def _start_downloading_piece(self, piece_index: int):
         cur_piece_length = self._download_info.get_real_piece_length(piece_index)
@@ -138,9 +155,9 @@ class TorrentManager:
         self._download_info.interesting_pieces.add(piece_index)
         piece_owners = self._download_info.piece_owners[piece_index]
         for peer in piece_owners:
-            self._peer_clients[peer].am_interested = True
+            self._peer_data[peer].client.am_interested = True
 
-        concurrent_peers_count = sum(1 for peer, size in self._peer_queue_size.items() if size)
+        concurrent_peers_count = sum(1 for peer, data in self._peer_data.items() if data.queue_size)
         logger.debug('piece %s started (owned by %s alive peers, concurrency: %s peers)',
                      piece_index, len(piece_owners), concurrent_peers_count)
 
@@ -150,15 +167,15 @@ class TorrentManager:
 
         self._download_info.interesting_pieces.remove(piece_index)
         for peer in self._download_info.piece_owners[piece_index]:
-            client = self._peer_clients[peer]
+            client = self._peer_data[peer].client
             for index in self._download_info.interesting_pieces:
                 if client.piece_owned[index]:
                     break
             else:
                 client.am_interested = False
 
-        for client in self._peer_clients.values():
-            client.send_have(piece_index)
+        for data in self._peer_data.values():
+            data.client.send_have(piece_index)
 
         logger.debug('piece %s finished', piece_index)
         selected_piece_count = self._download_info.piece_selected.count()
@@ -178,9 +195,9 @@ class TorrentManager:
             return
 
         for peer in self._download_info.piece_sources[piece_index]:
-            if peer not in self._peer_clients:
+            if peer not in self._peer_data:
                 continue
-            self._peer_clients[peer].increase_distrust()
+            self._peer_data[peer].client.increase_distrust()
         self._download_info.reset_piece(piece_index)
 
         logger.debug('piece %s not valid, redownloading', piece_index)
@@ -191,34 +208,29 @@ class TorrentManager:
     HANG_PENALTY_COEFF = 100
 
     def get_peer_download_rate(self, peer: Peer) -> int:
-        client = self._peer_clients[peer]
+        data = self._peer_data[peer]
 
-        rate = client.downloaded  # To reach maximal download speed
-        rate -= 2 ** client.distrust_rate
+        rate = data.client.downloaded  # To reach maximal download speed
+        rate -= 2 ** data.client.distrust_rate
         rate += random.randint(1, 100)  # Helps to shuffle clients in the beginning
 
-        if peer in self._peer_hanged_time and \
-                time.time() - self._peer_hanged_time[peer] <= TorrentManager.HANG_PENALTY_DURATION:
+        if data.hanged_time is not None and time.time() - data.hanged_time <= TorrentManager.HANG_PENALTY_DURATION:
             rate //= TorrentManager.HANG_PENALTY_COEFF
 
         return rate
 
     def get_peer_upload_rate(self, peer: Peer) -> int:
-        client = self._peer_clients[peer]
+        data = self._peer_data[peer]
 
-        rate = client.downloaded  # We owe them for downloading
-        if self._download_info.complete:
-            rate += client.uploaded  # To reach maximal upload speed
-        rate -= 2 ** client.distrust_rate
+        rate = data.client.downloaded  # We owe them for downloading
+        if self._download_info.is_complete():
+            rate += data.client.uploaded  # To reach maximal upload speed
+        rate -= 2 ** data.client.distrust_rate
         rate += random.randint(1, 100)  # Helps to shuffle clients in the beginning
 
         return rate
 
     DOWNLOAD_PEER_COUNT = 15
-    DOWNLOAD_REQUEST_QUEUE_SIZE = 10
-
-    def _is_peer_free(self, peer: Peer):
-        return self._peer_queue_size[peer] < TorrentManager.DOWNLOAD_REQUEST_QUEUE_SIZE
 
     def _request_piece_blocks(self, count: int, piece_index: int) -> Iterator[BlockRequestFuture]:
         if not count:
@@ -226,6 +238,7 @@ class TorrentManager:
 
         request_deque = self._piece_block_queue[piece_index]
         performer = None
+        performer_data = None
         yielded_count = 0
         while request_deque:
             request = request_deque[0]
@@ -233,17 +246,18 @@ class TorrentManager:
                 request_deque.popleft()
                 continue
 
-            if performer is None or not self._is_peer_free(performer):
+            if performer is None or not performer_data.is_free():
                 available_peers = {peer for peer in self._download_info.piece_owners[piece_index]
-                                   if not self._peer_clients[peer].peer_choking and self._is_peer_free(peer)}
+                                   if self._peer_data[peer].is_available()}
                 if not available_peers:
                     return
                 performer = max(available_peers, key=self.get_peer_download_rate)
+                performer_data = self._peer_data[performer]
             request_deque.popleft()
-            self._peer_queue_size[performer] += 1
+            performer_data.queue_size += 1
 
             request.performer = performer
-            self._peer_clients[performer].send_request(request)
+            performer_data.client.send_request(request)
             yield request
 
             yielded_count += 1
@@ -253,8 +267,8 @@ class TorrentManager:
     RAREST_PIECE_COUNT_TO_SELECT = 10
 
     def _select_new_piece(self, *, force: bool) -> Optional[int]:
-        appropriate_peers = {peer for peer in self._peer_clients
-                             if (force or not self._peer_clients[peer].peer_choking) and self._is_peer_free(peer)}
+        is_appropriate = PeerData.is_free if force else PeerData.is_available
+        appropriate_peers = {peer for peer, data in self._peer_data.items() if is_appropriate(data)}
         if not appropriate_peers:
             return None
 
@@ -315,7 +329,7 @@ class TorrentManager:
         self._tasks_waiting_for_more_peers += 1
         download_peers_active = TorrentManager.DOWNLOAD_PEER_COUNT - self._tasks_waiting_for_more_peers
         if download_peers_active <= TorrentManager.DOWNLOAD_PEERS_ACTIVE_TO_REQUEST_MORE_PEERS and \
-                len(self._peer_clients) < TorrentManager.MAX_PEERS_TO_ACTIVELY_CONNECT:
+                len(self._peer_data) < TorrentManager.MAX_PEERS_TO_ACTIVELY_CONNECT:
             self._more_peers_requested.set()
 
         if time.time() - self._download_start_time <= TorrentManager.STARTING_DURATION:
@@ -343,7 +357,7 @@ class TorrentManager:
     async def _execute_block_requests(self, processed_requests: List[BlockRequestFuture]):
         while True:
             try:
-                free_place_count = TorrentManager.DOWNLOAD_REQUEST_QUEUE_SIZE - len(processed_requests)
+                free_place_count = DOWNLOAD_REQUEST_QUEUE_SIZE - len(processed_requests)
                 processed_requests += self._request_blocks(free_place_count)
             except NotEnoughPeersError:
                 if not processed_requests:
@@ -366,8 +380,8 @@ class TorrentManager:
 
             if len(requests_pending) < len(processed_requests):
                 for request in requests_done:
-                    if request.performer in self._peer_clients:
-                        self._peer_queue_size[request.performer] -= 1
+                    if request.performer in self._peer_data:
+                        self._peer_data[request.performer].queue_size -= 1
 
                     if not self._download_info.piece_downloaded[request.piece_index] and \
                             not self._download_info.piece_blocks_expected[request.piece_index]:
@@ -375,15 +389,16 @@ class TorrentManager:
                 processed_requests.clear()
                 processed_requests += list(requests_pending)
             else:
-                hanged_peers = {request.performer for request in requests_pending} & set(self._peer_clients.keys())
-                if hanged_peers:
-                    logger.debug('peers %s hanged, leaving them alone for a while', ', '.join(map(str, hanged_peers)))
+                hanged_peers = {request.performer for request in requests_pending} & set(self._peer_data.keys())
+                cur_time = time.time()
                 for peer in hanged_peers:
-                    self._peer_hanged_time[peer] = time.time()
+                    self._peer_data[peer].hanged_time = cur_time
+                if hanged_peers:
+                    logger.debug('peers %s hanged', ', '.join(map(str, hanged_peers)))
 
                 for request in requests_pending:
-                    if request.performer in self._peer_clients:
-                        self._peer_queue_size[request.performer] -= 1
+                    if request.performer in self._peer_data:
+                        self._peer_data[request.performer].queue_size -= 1
                         request.prev_performers.add(request.performer)
                     request.performer = None
 
@@ -396,12 +411,12 @@ class TorrentManager:
     MAX_PEERS_TO_ACCEPT = 55
 
     def _connect_to_peers(self, peers: Sequence[Peer], force: bool):
-        peers = list({peer for peer in peers if peer not in self._peer_clients})
+        peers = list({peer for peer in peers if peer not in self._peer_data})
         if force:
             max_peers_count = TorrentManager.MAX_PEERS_TO_ACCEPT
         else:
             max_peers_count = TorrentManager.MAX_PEERS_TO_ACTIVELY_CONNECT
-        peers_to_connect_count = max(max_peers_count - len(self._peer_clients), 0)
+        peers_to_connect_count = max(max_peers_count - len(self._peer_data), 0)
         logger.debug('connecting to up to %s new peers', min(len(peers), peers_to_connect_count))
 
         for peer in peers[:peers_to_connect_count]:
@@ -410,7 +425,7 @@ class TorrentManager:
             self._client_executors[peer] = asyncio.ensure_future(self._execute_peer_client(peer, client))
 
     async def _accept_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        if len(self._peer_clients) >= TorrentManager.MAX_PEERS_TO_ACCEPT:
+        if len(self._peer_data) > TorrentManager.MAX_PEERS_TO_ACCEPT:
             writer.close()
             return
         addr = writer.get_extra_info('peername')
@@ -472,12 +487,12 @@ class TorrentManager:
 
         await asyncio.wait(self._request_executors)
 
-        assert self._download_info.complete
+        assert self._download_info.is_complete()
         await self._try_to_announce('completed')
         logger.info('file download complete')
 
-        for peer, client in self._peer_clients.items():
-            if client.seed:
+        for peer, data in self._peer_data.items():
+            if data.client.is_seed():
                 self._client_executors[peer].cancel()
 
     CHOKING_CHANGING_TIME = 10
@@ -492,7 +507,7 @@ class TorrentManager:
         connected_recently = []
         remaining_peers = []
         for peer in peers:
-            if cur_time - self._peer_connected_time[peer] <= TorrentManager.CONNECTED_RECENTLY_THRESHOLD:
+            if cur_time - self._peer_data[peer].connected_time <= TorrentManager.CONNECTED_RECENTLY_THRESHOLD:
                 connected_recently.append(peer)
             else:
                 remaining_peers.append(peer)
@@ -507,7 +522,7 @@ class TorrentManager:
         prev_unchoked_peers = set()
         optimistically_unchoked = None
         for i in itertools.count():
-            alive_peers = list(sorted(self._peer_clients.keys(), key=self.get_peer_upload_rate, reverse=True))
+            alive_peers = list(sorted(self._peer_data.keys(), key=self.get_peer_upload_rate, reverse=True))
             cur_unchoked_peers = set()
             interested_count = 0
 
@@ -518,24 +533,24 @@ class TorrentManager:
                     else:
                         optimistically_unchoked = None
 
-                if optimistically_unchoked is not None and optimistically_unchoked in self._peer_clients:
+                if optimistically_unchoked is not None and optimistically_unchoked in self._peer_data:
                     cur_unchoked_peers.add(optimistically_unchoked)
-                    if self._peer_clients[optimistically_unchoked].peer_interested:
+                    if self._peer_data[optimistically_unchoked].client.peer_interested:
                         interested_count += 1
 
             for peer in cast(List[Peer], alive_peers):
                 if interested_count == TorrentManager.UPLOAD_PEER_COUNT:
                     break
-                if self._peer_clients[peer].peer_interested:
+                if self._peer_data[peer].client.peer_interested:
                     interested_count += 1
 
                 cur_unchoked_peers.add(peer)
 
             for peer in prev_unchoked_peers - cur_unchoked_peers:
-                if peer in self._peer_clients:
-                    self._peer_clients[peer].am_choking = True
+                if peer in self._peer_data:
+                    self._peer_data[peer].client.am_choking = True
             for peer in cur_unchoked_peers:
-                self._peer_clients[peer].am_choking = False
+                self._peer_data[peer].client.am_choking = False
             logger.debug('now %s peers are unchoked (total_uploaded = %.1f MiB)',
                          len(cur_unchoked_peers), self._download_info.total_uploaded / TrackerHTTPClient.BYTES_PER_MIB)
 

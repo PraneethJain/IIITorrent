@@ -208,8 +208,7 @@ class DownloadInfo:
     def piece_selected(self) -> bitarray:
         return self._piece_selected
 
-    @property
-    def complete(self):
+    def is_complete(self) -> bool:
         return self._piece_downloaded & self._piece_selected == self._piece_selected
 
     @property
