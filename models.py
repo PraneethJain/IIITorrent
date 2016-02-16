@@ -83,6 +83,8 @@ class BlockRequestFuture(asyncio.Future, BlockRequest):
         asyncio.Future.__init__(self)
         BlockRequest.__init__(self, piece_index, block_begin, block_length)
 
+        self.performer = None
+
     __eq__ = asyncio.Future.__eq__
     __hash__ = asyncio.Future.__hash__
 
