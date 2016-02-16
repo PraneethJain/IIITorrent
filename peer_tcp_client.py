@@ -3,7 +3,7 @@ import logging
 import struct
 from enum import Enum
 from math import ceil
-from typing import Optional, Tuple, List, cast
+from typing import Optional, Tuple, List, cast, Sequence
 
 import contexttimer
 from bitarray import bitarray
@@ -44,6 +44,8 @@ class PeerTCPClient:
         self._peer_choking = True
         self._peer_interested = False
 
+        self._piece_owned = bitarray(download_info.piece_count)
+        self._piece_owned.setall(False)
         self._downloaded = 0
         self._uploaded = 0
         self._distrust_rate = 0
@@ -177,6 +179,14 @@ class PeerTCPClient:
         return self._peer_interested
 
     @property
+    def piece_owned(self) -> Sequence[bool]:
+        return self._piece_owned
+
+    @property
+    def seed(self) -> bool:
+        return self._piece_owned & self._download_info.piece_selected == self._download_info.piece_selected
+
+    @property
     def downloaded(self):
         return self._downloaded
 
@@ -210,6 +220,7 @@ class PeerTCPClient:
             self._peer_interested = False
 
     def _mark_as_owner(self, piece_index: int):
+        self._piece_owned[piece_index] = True
         self._download_info.piece_owners[piece_index].add(self._peer)
         if piece_index in self._download_info.interesting_pieces:
             self.am_interested = True
@@ -230,6 +241,9 @@ class PeerTCPClient:
             for i in range(piece_count, len(arr)):
                 if arr[i]:
                     raise ValueError('Spare bits in "bitfield" message must be zero')
+
+        if self._download_info.complete and self.seed:
+            raise RuntimeError('A seed is disconnected because a download is complete')
 
     MAX_REQUEST_LENGTH = 2 ** 17
 

@@ -116,6 +116,9 @@ class DownloadInfo:
         self._piece_downloaded = bitarray(piece_count, endian='big')
         self._piece_downloaded.setall(False)
         self._downloaded_piece_count = 0
+        self._piece_selected = bitarray(piece_count)
+        self._piece_selected.setall(True)
+        # TODO: Download only some files
 
         blocks_per_piece = ceil(piece_length / DownloadInfo.MARKED_BLOCK_SIZE)
         self._piece_block_downloaded = [None] * piece_count * blocks_per_piece  # type: List[Optional[bitarray]]
@@ -190,6 +193,14 @@ class DownloadInfo:
     @property
     def downloaded_piece_count(self) -> int:
         return self._downloaded_piece_count
+
+    @property
+    def piece_selected(self) -> bitarray:
+        return self._piece_selected
+
+    @property
+    def complete(self):
+        return self._piece_downloaded & self._piece_selected == self._piece_selected
 
     @property
     def interesting_pieces(self) -> MutableSet[int]:
