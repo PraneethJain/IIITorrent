@@ -5,15 +5,13 @@ from enum import Enum
 from math import ceil
 from typing import Optional, Tuple, List, cast, Sequence
 
-import contexttimer
 from bitarray import bitarray
 
 from file_structure import FileStructure
 from models import DownloadInfo, Peer, SHA1_DIGEST_LEN, BlockRequest
+from utils import check_time
 
 CLIENT_LOGGER_LEVEL = logging.INFO
-
-TIMER_WARNING_THRESHOLD = 0.1
 
 
 class MessageType(Enum):
@@ -298,15 +296,11 @@ class PeerTCPClient:
         self._downloaded += block_length
         self._download_info.total_downloaded += block_length
 
-        with contexttimer.Timer() as timer:
+        with check_time('write'):
             self._file_structure.write(piece_index * self._download_info.piece_length + block_begin, block_data)
-        if timer.elapsed >= TIMER_WARNING_THRESHOLD:
-            self._logger.warning('Too long write (%.1f s)', timer.elapsed)
 
-        with contexttimer.Timer() as timer:
+        with check_time('marking of downloaded blocks'):
             self._download_info.mark_downloaded_blocks(self._peer, request)
-        if timer.elapsed >= TIMER_WARNING_THRESHOLD:
-            self._logger.warning('Too long mark_downloaded_blocks (%.1f s)', timer.elapsed)
         self._download_info.piece_sources[piece_index].add(self._peer)
 
     async def run(self):

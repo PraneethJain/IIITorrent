@@ -7,18 +7,15 @@ import time
 from collections import deque, OrderedDict
 from typing import Dict, List, Optional, Tuple, Sequence, Iterable, cast, Iterator
 
-import contexttimer
-
 from file_structure import FileStructure
 from models import BlockRequestFuture, Peer, TorrentInfo
 from peer_tcp_client import PeerTCPClient
 from tracker_http_client import TrackerHTTPClient
+from utils import check_time
 
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
-
-TIMER_WARNING_THRESHOLD = 0.1
 
 
 class NotEnoughPeersError(RuntimeError):
@@ -111,10 +108,8 @@ class TorrentManager:
 
     def _flush_piece(self, index: int):
         piece_offset, cur_piece_length = self._get_piece_position(index)
-        with contexttimer.Timer() as timer:
+        with check_time('flush'):
             self._file_structure.flush(piece_offset, cur_piece_length)
-        if timer.elapsed >= TIMER_WARNING_THRESHOLD:
-            logger.warning('Too long flush (%.1f s)', timer.elapsed)
 
     FLAG_TRANSMISSION_TIMEOUT = 0.5
 
@@ -185,15 +180,13 @@ class TorrentManager:
         logger.info('progress %.1lf%% (%s / %s pieces)', progress * 100,
                     self._download_info.downloaded_piece_count, selected_piece_count)
 
-    async def _validate_piece(self, piece_index: int):
+    def _validate_piece(self, piece_index: int):
         assert self._download_info.is_all_piece_blocks_downloaded(piece_index)
 
         piece_offset, cur_piece_length = self._get_piece_position(piece_index)
-        with contexttimer.Timer() as timer:
+        with check_time('hash calculation'):
             data = self._file_structure.read(piece_offset, cur_piece_length)
             actual_digest = hashlib.sha1(data).digest()
-        if timer.elapsed >= TIMER_WARNING_THRESHOLD:
-            logger.warning('Too long hash comparison (%.1f s)', timer.elapsed)
         if actual_digest == self._download_info.piece_hashes[piece_index]:
             self._finish_downloading_piece(piece_index)
             return
@@ -294,27 +287,26 @@ class TorrentManager:
     async def _request_blocks(self, count: int) -> List[BlockRequestFuture]:
         result = []
         consumed_pieces = []
-        for piece_index, request_deque in self._piece_block_queue.items():
-            result += list(self._request_piece_blocks(count - len(result), piece_index))
-            if not request_deque:
-                consumed_pieces.append(piece_index)
-        for piece_index in consumed_pieces:
-            del self._piece_block_queue[piece_index]
+        try:
+            for piece_index, request_deque in self._piece_block_queue.items():
+                result += list(self._request_piece_blocks(count - len(result), piece_index))
+                if not request_deque:
+                    consumed_pieces.append(piece_index)
+                if len(result) == count:
+                    return result
 
-        if len(result) == count:
-            return result
+            with check_time('selecting new piece'):
+                new_piece_index = self._select_new_piece()
+            if new_piece_index is not None:
+                self._non_started_pieces.remove(new_piece_index)
+                await self._start_downloading_piece(new_piece_index)
 
-        with contexttimer.Timer() as timer:
-            new_piece_index = self._select_new_piece()
-        if timer.elapsed >= TIMER_WARNING_THRESHOLD:
-            logger.warning('Too long select_new_piece (%.1f s)', timer.elapsed)
-        if new_piece_index is not None:
-            self._non_started_pieces.remove(new_piece_index)
-            await self._start_downloading_piece(new_piece_index)
-
-            result += list(self._request_piece_blocks(count - len(result), new_piece_index))
-            if not self._piece_block_queue[new_piece_index]:
-                del self._piece_block_queue[new_piece_index]
+                result += list(self._request_piece_blocks(count - len(result), new_piece_index))
+                if not self._piece_block_queue[new_piece_index]:
+                    consumed_pieces.append(new_piece_index)
+        finally:
+            for piece_index in consumed_pieces:
+                del self._piece_block_queue[piece_index]
 
         if not result:
             if not self._piece_block_queue and not self._non_started_pieces:
@@ -354,8 +346,8 @@ class TorrentManager:
     async def _execute_block_requests(self, processed_requests: List[BlockRequestFuture]):
         while True:
             try:
-                free_place_count = TorrentManager.DOWNLOAD_REQUEST_QUEUE_SIZE - len(processed_requests)
                 async with self._request_consumption_lock:
+                    free_place_count = TorrentManager.DOWNLOAD_REQUEST_QUEUE_SIZE - len(processed_requests)
                     processed_requests += await self._request_blocks(free_place_count)
             except NotEnoughPeersError:
                 if not processed_requests:
@@ -383,7 +375,7 @@ class TorrentManager:
 
                     if not self._download_info.piece_downloaded[request.piece_index] and \
                             not self._download_info.piece_blocks_expected[request.piece_index]:
-                        await self._validate_piece(request.piece_index)
+                        self._validate_piece(request.piece_index)
                 processed_requests.clear()
                 processed_requests += list(requests_pending)
             else:
