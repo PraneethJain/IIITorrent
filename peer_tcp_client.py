@@ -244,7 +244,7 @@ class PeerTCPClient:
 
     async def _process_requests(self, message_id: MessageType, payload: memoryview):
         piece_index, begin, length = struct.unpack('!3I', cast(bytes, payload))
-        request = BlockRequest(piece_index, begin, length, None)
+        request = BlockRequest(piece_index, begin, length)
         self._check_position_range(request)
 
         if message_id == MessageType.request:
@@ -274,7 +274,7 @@ class PeerTCPClient:
         piece_index, block_begin = struct.unpack_from(fmt, payload)
         block_data = memoryview(payload)[struct.calcsize(fmt):]
         block_length = len(block_data)
-        request = BlockRequest(piece_index, block_begin, block_length, None)
+        request = BlockRequest(piece_index, block_begin, block_length)
         self._check_position_range(request)
 
         if self._download_info.piece_downloaded[piece_index] or not block_length:

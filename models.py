@@ -64,11 +64,10 @@ class FileInfo:
 
 
 class BlockRequest:
-    def __init__(self, piece_index: int, block_begin: int, block_length: int, downloaded: Optional[asyncio.Future]):
+    def __init__(self, piece_index: int, block_begin: int, block_length: int):
         self.piece_index = piece_index
         self.block_begin = block_begin
         self.block_length = block_length
-        self.downloaded = downloaded
 
     def __eq__(self, other):
         if not isinstance(other, BlockRequest):
@@ -76,7 +75,16 @@ class BlockRequest:
         return self.__dict__ == other.__dict__
 
     def __hash__(self):
-        return hash((self.piece_index, self.block_begin, self.block_length, self.downloaded))
+        return hash((self.piece_index, self.block_begin, self.block_length))
+
+
+class BlockRequestFuture(asyncio.Future, BlockRequest):
+    def __init__(self, piece_index: int, block_begin: int, block_length: int):
+        asyncio.Future.__init__(self)
+        BlockRequest.__init__(self, piece_index, block_begin, block_length)
+
+    __eq__ = asyncio.Future.__eq__
+    __hash__ = asyncio.Future.__hash__
 
 
 SHA1_DIGEST_LEN = 20
@@ -188,7 +196,7 @@ class DownloadInfo:
         self._piece_blocks_expected[index] = set()
 
     @property
-    def piece_blocks_expected(self) -> List[Optional[MutableSet[BlockRequest]]]:
+    def piece_blocks_expected(self) -> List[Optional[MutableSet[BlockRequestFuture]]]:
         return self._piece_blocks_expected
 
     def mark_downloaded_blocks(self, request: BlockRequest):
@@ -213,14 +221,14 @@ class DownloadInfo:
 
         blocks_expected = self._piece_blocks_expected[request.piece_index]
         downloaded_blocks = []
-        for request in blocks_expected:
-            query_begin = request.block_begin // DownloadInfo.MARKED_BLOCK_SIZE
-            query_end = ceil((request.block_begin + request.block_length) / DownloadInfo.MARKED_BLOCK_SIZE)
+        for fut in blocks_expected:
+            query_begin = fut.block_begin // DownloadInfo.MARKED_BLOCK_SIZE
+            query_end = ceil((fut.block_begin + fut.block_length) / DownloadInfo.MARKED_BLOCK_SIZE)
             if arr[query_begin:query_end].all():
-                downloaded_blocks.append(request)
-                request.downloaded.set_result(True)
-        for request in downloaded_blocks:
-            blocks_expected.remove(request)
+                downloaded_blocks.append(fut)
+                fut.set_result(True)
+        for fut in downloaded_blocks:
+            blocks_expected.remove(fut)
 
     def mark_piece_downloaded(self, index: int):
         if self._piece_downloaded[index]:

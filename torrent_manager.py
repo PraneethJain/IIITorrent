@@ -10,7 +10,7 @@ from typing import Dict, List, MutableSet, Optional, Tuple, Sequence, Iterable, 
 import contexttimer
 
 from file_structure import FileStructure
-from models import BlockRequest, Peer, TorrentInfo
+from models import BlockRequestFuture, Peer, TorrentInfo
 from peer_tcp_client import PeerTCPClient
 from tracker_http_client import TrackerHTTPClient
 
@@ -45,7 +45,7 @@ class TorrentManager:
         self._announcement_executor = None       # type: Optional[asyncio.Task]
         self._uploading_executor = None          # type: Optional[asyncio.Task]
         self._request_executors = []             # type: List[asyncio.Task]
-        self._executors_processed_requests = []  # type: List[List[BlockRequest]]
+        self._executors_processed_requests = []  # type: List[List[BlockRequestFuture]]
 
         self._pieces_to_download = None   # type: Sequence[int]
         self._non_started_pieces = None   # type: List[int]
@@ -117,7 +117,7 @@ class TorrentManager:
         for block_begin in range(0, cur_piece_length, TorrentManager.REQUEST_LENGTH):
             block_end = min(block_begin + TorrentManager.REQUEST_LENGTH, cur_piece_length)
             block_length = block_end - block_begin
-            request = BlockRequest(piece_index, block_begin, block_length, asyncio.Future())
+            request = BlockRequestFuture(piece_index, block_begin, block_length)
 
             blocks_expected.add(request)
             self._request_deque.append(request)
@@ -235,7 +235,7 @@ class TorrentManager:
 
     async def _prepare_requests(self) -> bool:
         while self._request_deque:
-            if not self._request_deque[0].downloaded.done():
+            if not self._request_deque[0].done():
                 return True
             self._request_deque.popleft()
 
@@ -243,8 +243,7 @@ class TorrentManager:
 
     DOWNLOAD_REQUEST_QUEUE_SIZE = 10
 
-    async def _consume_requests(self, processed_requests: List[BlockRequest],
-                                future_to_request: Dict[asyncio.Future, BlockRequest]) -> Peer:
+    async def _consume_requests(self, processed_requests: List[BlockRequestFuture]) -> Peer:
         download_info = self._torrent_info.download_info
 
         if not await self._prepare_requests():
@@ -264,7 +263,6 @@ class TorrentManager:
         request = first_request
         while True:
             processed_requests.append(request)
-            future_to_request[request.downloaded] = request
 
             client.send_request(request)
 
@@ -308,17 +306,16 @@ class TorrentManager:
     REQUEST_TIMEOUT = 6
     REQUEST_TIMEOUT_ENDGAME = 1
 
-    async def _execute_block_requests(self, processed_requests: List[BlockRequest]):
+    async def _execute_block_requests(self, processed_requests: List[BlockRequestFuture]):
         download_info = self._torrent_info.download_info
 
-        future_to_request = {}
         prev_performer = None
         while True:
             if not processed_requests:
                 prev_performer = None
             try:
                 with await self._request_consumption_lock:
-                    cur_performer = await self._consume_requests(processed_requests, future_to_request)
+                    cur_performer = await self._consume_requests(processed_requests)
             except NotEnoughPeersError:
                 cur_performer = None
                 if not processed_requests:
@@ -338,24 +335,21 @@ class TorrentManager:
                 cur_performer = prev_performer
             self._peers_busy.add(cur_performer)
 
-            expected_futures = [request.downloaded for request in processed_requests]
             if self._endgame_mode:
                 request_timeout = TorrentManager.REQUEST_TIMEOUT_ENDGAME
             else:
                 request_timeout = TorrentManager.REQUEST_TIMEOUT
-            futures_done, futures_pending = await asyncio.wait(expected_futures, return_when=asyncio.FIRST_COMPLETED,
-                                                               timeout=request_timeout)
+            requests_done, requests_pending = await asyncio.wait(
+                processed_requests, return_when=asyncio.FIRST_COMPLETED, timeout=request_timeout)
 
-            if len(futures_pending) < len(expected_futures):
-                for fut in futures_done:
-                    piece_index = future_to_request[fut].piece_index
+            if len(requests_pending) < len(processed_requests):
+                for request in requests_done:
+                    piece_index = request.piece_index
                     if (not download_info.piece_downloaded[piece_index] and
                             not download_info.piece_blocks_expected[piece_index]):
                         await self._validate_piece(piece_index)
-
-                    del future_to_request[fut]
                 processed_requests.clear()
-                processed_requests += [future_to_request[fut] for fut in futures_pending]
+                processed_requests += list(requests_pending)
             else:
                 logger.debug('peer %s hanged, leaving it alone for a while', cur_performer)
                 self._peer_hanged_time[cur_performer] = time.time()
@@ -363,9 +357,8 @@ class TorrentManager:
                 # It's acceptable, because in following requests the old performer will be marked as hanged too
                 # (and the new performer will be unlocked soon).
 
-                for fut in futures_pending:
-                    self._request_deque.appendleft(future_to_request[fut])
-                    del future_to_request[fut]
+                for request in requests_pending:
+                    self._request_deque.appendleft(request)
                 processed_requests.clear()
                 self._request_deque_relevant.set()
                 self._request_deque_relevant.clear()
