@@ -2,16 +2,21 @@ import asyncio
 import functools
 import os
 from bisect import bisect_right
-from typing import Iterable, BinaryIO, Tuple
+from typing import Iterable, BinaryIO, Tuple, Callable, cast
 
 from models import DownloadInfo
 
 
 def delegate_to_executor(func):
     @functools.wraps(func)
-    async def wrapper(self: 'FileStructure', *args, **kwargs):
-        async with self._lock:
+    async def wrapper(self: 'FileStructure', *args, acquire_lock=True, **kwargs):
+        if acquire_lock:
+            await self.lock.acquire()
+        try:
             return await self._loop.run_in_executor(None, functools.partial(func, self, *args, **kwargs))
+        finally:
+            if acquire_lock:
+                self.lock.release()
 
     return wrapper
 
@@ -48,6 +53,10 @@ class FileStructure:
             raise
 
         self._offsets.append(offset)  # Fake entry for convenience
+
+    @property
+    def lock(self) -> asyncio.Lock:
+        return self._lock
 
     def _iter_files(self, offset: int, data_length: int) -> Iterable[Tuple[BinaryIO, int, int]]:
         if offset < 0 or offset + data_length > self._download_info.total_size:

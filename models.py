@@ -123,6 +123,8 @@ class DownloadInfo:
         self._piece_owners = [set() for _ in range(piece_count)]
 
         self._piece_sources = [set() for _ in range(piece_count)]
+        self._piece_validating = bitarray(piece_count)
+        self._piece_validating.setall(False)
         self._piece_downloaded = bitarray(piece_count, endian='big')
         self._piece_downloaded.setall(False)
         self._downloaded_piece_count = 0
@@ -199,6 +201,10 @@ class DownloadInfo:
         return self._piece_sources
 
     @property
+    def piece_validating(self) -> bitarray:
+        return self._piece_validating
+
+    @property
     def piece_downloaded(self) -> bitarray:
         return self._piece_downloaded
 
@@ -230,9 +236,9 @@ class DownloadInfo:
 
     def mark_downloaded_blocks(self, source: Peer, request: BlockRequest):
         if self._piece_downloaded[request.piece_index]:
-            raise ValueError('The piece is already downloaded')
-        real_piece_length = self.get_real_piece_length(request.piece_index)
+            return
 
+        real_piece_length = self.get_real_piece_length(request.piece_index)
         arr = self._piece_block_downloaded[request.piece_index]
         if arr is None:
             arr = bitarray(ceil(real_piece_length / DownloadInfo.MARKED_BLOCK_SIZE))

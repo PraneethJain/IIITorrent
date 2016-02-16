@@ -8,7 +8,7 @@ from typing import Optional, Tuple, List, cast, Sequence
 from bitarray import bitarray
 
 from file_structure import FileStructure
-from models import DownloadInfo, Peer, SHA1_DIGEST_LEN, BlockRequest
+from models import SHA1_DIGEST_LEN, DownloadInfo, Peer, BlockRequest
 
 CLIENT_LOGGER_LEVEL = logging.INFO
 
@@ -31,81 +31,97 @@ class SeedError(Exception):
 
 
 class PeerTCPClient:
-    def __init__(self, download_info: DownloadInfo, file_structure: FileStructure, our_peer_id: bytes, peer: Peer):
-        self._download_info = download_info
-        self._file_structure = file_structure
+    def __init__(self, our_peer_id: bytes, peer: Peer):
         self._our_peer_id = our_peer_id
         self._peer = peer
 
         self._logger = logging.getLogger('[{}]'.format(peer))
         self._logger.setLevel(CLIENT_LOGGER_LEVEL)
 
+        self._download_info = None   # type: DownloadInfo
+        self._file_structure = None  # type: FileStructure
+        self._piece_owned = None     # type: bitarray
+
         self._am_choking = True
         self._am_interested = False
         self._peer_choking = True
         self._peer_interested = False
 
-        self._piece_owned = bitarray(download_info.piece_count)
-        self._piece_owned.setall(False)
         self._downloaded = 0
         self._uploaded = 0
 
-        self._reader = None  # type: asyncio.StreamReader
-        self._writer = None  # type: asyncio.StreamWriter
+        self._reader = None               # type: asyncio.StreamReader
+        self._writer = None               # type: asyncio.StreamWriter
         self._connected = False
 
-    PEER_HANDSHAKE_MESSAGE = b'BitTorrent protocol'
+    _handshake_message = b'BitTorrent protocol'
+    HANDSHAKE_DATA = bytes([len(_handshake_message)]) + _handshake_message
+    RESERVED_BYTES = b'\0' * 8
 
     CONNECT_TIMEOUT = 5
     READ_TIMEOUT = 5
     MAX_SILENCE_DURATION = 5 * 60
     WRITE_TIMEOUT = 5
 
-    async def _perform_handshake(self):
-        info_hash = self._download_info.info_hash
+    def _send_protocol_data(self):
+        self._writer.write(PeerTCPClient.HANDSHAKE_DATA + PeerTCPClient.RESERVED_BYTES)
 
-        message = PeerTCPClient.PEER_HANDSHAKE_MESSAGE
-        message_len = len(message)
-        handshake_data = (bytes([message_len]) + message + b'\0' * 8 +
-                          info_hash + self._our_peer_id)
-        self._writer.write(handshake_data)
-        self._logger.debug('handshake sent')
+    async def _receive_protocol_data(self):
+        data_len = len(PeerTCPClient.HANDSHAKE_DATA) + len(PeerTCPClient.RESERVED_BYTES)
+        response = await asyncio.wait_for(self._reader.readexactly(data_len), PeerTCPClient.READ_TIMEOUT)
 
-        response = await asyncio.wait_for(self._reader.readexactly(len(handshake_data)), PeerTCPClient.READ_TIMEOUT)
-
-        if response[:message_len + 1] != handshake_data[:message_len + 1]:
+        if response[:len(PeerTCPClient.HANDSHAKE_DATA)] != PeerTCPClient.HANDSHAKE_DATA:
             raise ValueError('Unknown protocol')
-        offset = message_len + 1 + 8
 
-        if response[offset:offset + SHA1_DIGEST_LEN] != info_hash:
-            raise ValueError("info_hashes don't match")
-        offset += SHA1_DIGEST_LEN
+    def _populate_info(self, download_info: DownloadInfo, file_structure: FileStructure):
+        self._download_info = download_info
+        self._file_structure = file_structure
+        self._piece_owned = bitarray(download_info.piece_count)
+        self._piece_owned.setall(False)
 
-        actual_peer_id = response[offset:offset + len(self._our_peer_id)]
+        self._writer.write(self._download_info.info_hash + self._our_peer_id)
+
+    async def _receive_info(self) -> bytes:
+        data_len = SHA1_DIGEST_LEN + len(self._our_peer_id)
+        response = await asyncio.wait_for(self._reader.readexactly(data_len), PeerTCPClient.READ_TIMEOUT)
+
+        actual_info_hash = response[:SHA1_DIGEST_LEN]
+        actual_peer_id = response[SHA1_DIGEST_LEN:]
         if self._our_peer_id == actual_peer_id:
             raise ValueError('Connection to ourselves')
         if self._peer.peer_id is not None and self._peer.peer_id != actual_peer_id:
             raise ValueError('Unexpected peer_id')
         self._peer.peer_id = actual_peer_id
 
-        self._logger.debug('handshake performed')
+        return actual_info_hash
 
-    async def connect(self, streams: Tuple[asyncio.StreamReader, asyncio.StreamWriter]=None):
-        if streams is None:
-            self._logger.debug('trying to connect')
-            self._reader, self._writer = await asyncio.wait_for(
-                asyncio.open_connection(self._peer.host, self._peer.port), PeerTCPClient.CONNECT_TIMEOUT)
-            self._logger.debug('connected')
-        else:
-            self._reader, self._writer = streams
+    async def connect(self, download_info: DownloadInfo, file_structure: FileStructure):
+        self._reader, self._writer = await asyncio.wait_for(
+            asyncio.open_connection(self._peer.host, self._peer.port), PeerTCPClient.CONNECT_TIMEOUT)
 
-        try:
-            await self._perform_handshake()
-            self._send_bitfield()
-        except:
-            self.close()
-            raise
+        self._send_protocol_data()
+        self._populate_info(download_info, file_structure)
 
+        await self._receive_protocol_data()
+        if await self._receive_info() != download_info.info_hash:
+            raise ValueError("info_hashes don't match")
+
+        self._send_bitfield()
+        self._connected = True
+
+    async def accept(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> bytes:
+        self._reader = reader
+        self._writer = writer
+
+        self._send_protocol_data()
+
+        await self._receive_protocol_data()
+        return await self._receive_info()
+
+    def confirm_info_hash(self, download_info: DownloadInfo, file_structure: FileStructure):
+        self._populate_info(download_info, file_structure)
+
+        self._send_bitfield()
         self._connected = True
 
     MAX_MESSAGE_LENGTH = 2 ** 18
@@ -284,16 +300,23 @@ class PeerTCPClient:
         request = BlockRequest(piece_index, block_begin, block_length)
         self._check_position_range(request)
 
-        if self._download_info.piece_downloaded[piece_index] or not block_length:
+        if not block_length:
             return
 
-        self._downloaded += block_length
-        self._download_info.total_downloaded += block_length
+        async with self._file_structure.lock:
+            # Manual lock acquiring guarantees that piece validation will not be performed between
+            # condition checking and piece writing
+            if self._download_info.piece_validating[piece_index] or self._download_info.piece_downloaded[piece_index]:
+                return
 
-        await self._file_structure.write(piece_index * self._download_info.piece_length + block_begin, block_data)
+            self._downloaded += block_length
+            self._download_info.total_downloaded += block_length
 
-        self._download_info.mark_downloaded_blocks(self._peer, request)
-        self._download_info.piece_sources[piece_index].add(self._peer)
+            await self._file_structure.write(piece_index * self._download_info.piece_length + block_begin, block_data,
+                                             acquire_lock=False)
+
+            self._download_info.mark_downloaded_blocks(self._peer, request)
+            self._download_info.piece_sources[piece_index].add(self._peer)
 
     async def run(self):
         while True:
@@ -347,6 +370,7 @@ class PeerTCPClient:
         await asyncio.wait_for(self._writer.drain(), PeerTCPClient.WRITE_TIMEOUT)
 
     def close(self):
-        self._writer.close()
+        if self._writer is not None:
+            self._writer.close()
 
         self._connected = False

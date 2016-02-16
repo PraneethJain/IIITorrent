@@ -6,11 +6,11 @@ import random
 import time
 from collections import deque, OrderedDict
 from math import ceil
-from typing import Dict, List, Optional, Tuple, Sequence, Iterable, cast, Iterator, Set
+from typing import Dict, List, Optional, Tuple, Sequence, Iterable, cast, Iterator
 
 from file_structure import FileStructure
 from models import BlockRequestFuture, Peer, TorrentInfo
-from peer_tcp_client import PeerTCPClient, SeedError
+from peer_tcp_client import PeerTCPClient
 from tracker_http_client import TrackerHTTPClient
 
 
@@ -52,16 +52,15 @@ class PeerData:
 
 
 class TorrentManager:
-    def __init__(self, torrent_info: TorrentInfo, our_peer_id: bytes, download_dir: str):
+    def __init__(self, torrent_info: TorrentInfo, our_peer_id: bytes, server_port: Optional[int], download_dir: str):
         self._torrent_info = torrent_info
         self._download_info = torrent_info.download_info
         self._our_peer_id = our_peer_id
+        self._server_port = server_port
 
         self._tracker_client = TrackerHTTPClient(self._torrent_info, self._our_peer_id)
         self._peer_data = {}  # type: Dict[Peer, PeerData]
 
-        self._server = None
-        self._server_port = None                 # type: Optional[int]
         self._client_executors = {}              # type: Dict[Peer, asyncio.Task]
         self._keeping_alive_executor = None      # type: Optional[asyncio.Task]
         self._announcement_executor = None       # type: Optional[asyncio.Task]
@@ -71,7 +70,6 @@ class TorrentManager:
 
         self._non_started_pieces = None   # type: List[int]
         self._download_start_time = None  # type: float
-        self._validating_pieces = set()   # type: Set[int]
 
         self._piece_block_queue = OrderedDict()
 
@@ -82,26 +80,27 @@ class TorrentManager:
 
         self._file_structure = FileStructure(download_dir, torrent_info.download_info)
 
-    async def _execute_peer_client(self, peer: Peer, client: PeerTCPClient,
-                                   streams: Tuple[asyncio.StreamReader, asyncio.StreamWriter]=None):
+    async def _execute_peer_client(self, peer: Peer, client: PeerTCPClient, *, need_connect: bool):
         try:
-            await client.connect(streams)
-
-            self._peer_data[peer] = PeerData(client, time.time())
-
             try:
+                if need_connect:
+                    await client.connect(self._download_info, self._file_structure)
+                else:
+                    client.confirm_info_hash(self._download_info, self._file_structure)
+
+                self._peer_data[peer] = PeerData(client, time.time())
+
                 await client.run()
             finally:
-                client.close()
+                if peer in self._peer_data:
+                    for owners in self._download_info.piece_owners:
+                        if peer in owners:
+                            owners.remove(peer)
+                    del self._peer_data[peer]
 
-                for owners in self._download_info.piece_owners:
-                    if peer in owners:
-                        owners.remove(peer)
-                del self._peer_data[peer]
+                client.close()
         except asyncio.CancelledError:
             raise
-        except SeedError:
-            pass
         except Exception as e:
             logger.debug('%s disconnected because of %s', peer, repr(e))
 
@@ -377,17 +376,18 @@ class TorrentManager:
                 processed_requests, return_when=asyncio.FIRST_COMPLETED, timeout=request_timeout)
 
             if len(requests_pending) < len(processed_requests):
+                piece_validating = self._download_info.piece_validating
                 for request in requests_done:
                     if request.performer in self._peer_data:
                         self._peer_data[request.performer].queue_size -= 1
 
                     piece_index = request.piece_index
-                    if piece_index not in self._validating_pieces and \
+                    if not piece_validating[piece_index] and \
                             not self._download_info.piece_downloaded[piece_index] and \
                             not self._download_info.piece_blocks_expected[piece_index]:
-                        self._validating_pieces.add(piece_index)
+                        piece_validating[piece_index] = True
                         await self._validate_piece(request.piece_index)
-                        self._validating_pieces.remove(piece_index)
+                        piece_validating[piece_index] = False
                 processed_requests.clear()
                 processed_requests += list(requests_pending)
             else:
@@ -423,23 +423,18 @@ class TorrentManager:
         logger.debug('connecting to up to %s new peers', min(len(peers), peers_to_connect_count))
 
         for peer in peers[:peers_to_connect_count]:
-            client = PeerTCPClient(self._torrent_info.download_info, self._file_structure,
-                                   self._our_peer_id, peer)
-            self._client_executors[peer] = asyncio.ensure_future(self._execute_peer_client(peer, client))
+            client = PeerTCPClient(self._our_peer_id, peer)
+            self._client_executors[peer] = asyncio.ensure_future(
+                self._execute_peer_client(peer, client, need_connect=True))
 
-    async def _accept_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        if len(self._peer_data) > TorrentManager.MAX_PEERS_TO_ACCEPT:
-            writer.close()
-            return
-        addr = writer.get_extra_info('peername')
-        peer = Peer(addr[0], addr[1])
-        if self._download_info.is_banned(peer):
-            writer.close()
+    def accept_client(self, peer: Peer, client: PeerTCPClient):
+        if len(self._peer_data) > TorrentManager.MAX_PEERS_TO_ACCEPT or self._download_info.is_banned(peer):
+            client.close()
             return
         logger.debug('accepted connection from %s', peer)
 
-        client = PeerTCPClient(self._torrent_info.download_info, self._file_structure, self._our_peer_id, peer)
-        self._client_executors[peer] = asyncio.ensure_future(self._execute_peer_client(peer, client, (reader, writer)))
+        self._client_executors[peer] = asyncio.ensure_future(
+            self._execute_peer_client(peer, client, need_connect=False))
 
     FAKE_SERVER_PORT = 6881
     DEFAULT_MIN_INTERVAL = 30
@@ -569,21 +564,6 @@ class TorrentManager:
     ANNOUNCE_FAILED_SLEEP_TIME = 3
 
     async def run(self):
-        logger.debug('starting server')
-        for port in TorrentManager.SERVER_PORT_RANGE:
-            try:
-                self._server = await asyncio.start_server(self._accept_client, port=port)
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                logger.debug('exception on server starting on port %s: %s', port, repr(e))
-            else:
-                self._server_port = port
-                logger.debug('server started on port %s', port)
-                break
-        else:
-            logger.warning('failed to start server, giving up')
-
         while not await self._try_to_announce('started'):
             await asyncio.sleep(TorrentManager.ANNOUNCE_FAILED_SLEEP_TIME)
 
@@ -596,11 +576,6 @@ class TorrentManager:
         await self._download()
 
     async def stop(self):
-        if self._server is not None:
-            self._server.close()
-            await self._server.wait_closed()
-            self._server = None
-
         executors = (self._request_executors +
                      [self._uploading_executor, self._announcement_executor, self._keeping_alive_executor] +
                      list(self._client_executors.values()))
@@ -609,9 +584,7 @@ class TorrentManager:
         for task in executors:
             task.cancel()
         if executors:
-            logger.debug('all tasks done or cancelled, awaiting finalizers')
             await asyncio.wait(executors)
-            logger.debug('finalizers done')
 
         self._request_executors.clear()
         self._executors_processed_requests.clear()

@@ -7,8 +7,8 @@ import pickle
 import signal
 import sys
 
-from models import TorrentInfo, generate_peer_id
-from torrent_manager import TorrentManager
+from control_manager import ControlManager
+from models import TorrentInfo
 
 
 DOWNLOAD_DIR = 'downloads'
@@ -23,6 +23,10 @@ logger.setLevel(logging.DEBUG)
 
 
 def main():
+    loop = asyncio.get_event_loop()
+    control = ControlManager()
+    loop.run_until_complete(control.start())
+
     if os.path.isfile(STATE_FILENAME):
         with open(STATE_FILENAME, 'rb') as f:
             torrent_info = pickle.load(f)
@@ -31,12 +35,7 @@ def main():
         torrent_filename = sys.argv[1]
         torrent_info = TorrentInfo.from_file(torrent_filename)
         logger.info('new torrent loaded')
-
-    our_peer_id = generate_peer_id()
-    manager = TorrentManager(torrent_info, our_peer_id, DOWNLOAD_DIR)
-
-    loop = asyncio.get_event_loop()
-    manager_task = asyncio.ensure_future(manager.run())
+    control.add(torrent_info, DOWNLOAD_DIR)
 
     stopping = False
 
@@ -46,8 +45,7 @@ def main():
             return
         stopping = True
 
-        manager_task.cancel()
-        stop_task = asyncio.ensure_future(manager.stop())
+        stop_task = asyncio.ensure_future(control.stop())
         stop_task.add_done_callback(lambda fut: loop.stop())
 
     for sig in (signal.SIGINT, signal.SIGTERM):
