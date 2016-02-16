@@ -38,13 +38,20 @@ def main():
     loop = asyncio.get_event_loop()
     manager_task = asyncio.ensure_future(manager.run())
 
-    def signal_handler():
+    stopping = False
+
+    def stop_handler():
+        nonlocal stopping
+        if stopping:
+            return
+        stopping = True
+
         manager_task.cancel()
         stop_task = asyncio.ensure_future(manager.stop())
         stop_task.add_done_callback(lambda fut: loop.stop())
 
     for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, signal_handler)
+        loop.add_signal_handler(sig, stop_handler)
 
     try:
         loop.run_forever()

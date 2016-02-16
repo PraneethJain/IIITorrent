@@ -1,10 +1,11 @@
 import asyncio
 import hashlib
+import itertools
 import logging
 import random
 import time
 from collections import deque
-from typing import Dict, List, MutableSet, Optional, Tuple, Sequence
+from typing import Dict, List, MutableSet, Optional, Tuple, Sequence, Iterable, cast
 
 import contexttimer
 
@@ -35,11 +36,13 @@ class TorrentManager:
 
         self._tracker_client = TrackerHTTPClient(self._torrent_info, self._our_peer_id)
         self._peer_clients = {}                  # type: Dict[Peer, PeerTCPClient]
-        self._peer_hanged_time = {}              # type: Dict[Peer, int]
+        self._peer_connected_time = {}           # type: Dict[Peer, float]
+        self._peer_hanged_time = {}              # type: Dict[Peer, float]
         self._client_executors = []              # type: List[asyncio.Task]
+        self._announcement_executor = None       # type: Optional[asyncio.Task]
+        self._uploading_executor = None          # type: Optional[asyncio.Task]
         self._request_executors = []             # type: List[asyncio.Task]
         self._executors_processed_requests = []  # type: List[List[BlockRequest]]
-        self._announcement_executor = None       # type: Optional[asyncio.Task]
 
         self._pieces_to_download = None   # type: Sequence[int]
         self._non_started_pieces = None   # type: List[int]
@@ -60,6 +63,7 @@ class TorrentManager:
             await client.connect()
 
             self._peer_clients[peer] = client
+            self._peer_connected_time[peer] = time.time()
 
             try:
                 await client.run()
@@ -184,22 +188,31 @@ class TorrentManager:
 
     _INF = float('inf')
 
-    PEER_LEAVING_ALONE_TIME = 15
+    HANG_PENALTY_DURATION = 15
+    HANG_PENALTY_COEFF = 100
 
-    def get_peer_rate(self, peer: Peer):
-        # Manager will download from peers with maximal rate first
-
-        if peer not in self._peer_clients or \
-                (peer in self._peer_hanged_time and
-                 time.time() - self._peer_hanged_time[peer] <= TorrentManager.PEER_LEAVING_ALONE_TIME):
-            return -TorrentManager._INF
+    def get_peer_download_rate(self, peer: Peer) -> int:
         client = self._peer_clients[peer]
 
         rate = client.downloaded  # To reach maximal download speed
-        # TODO: Try to measure speed for last minute
-        rate += client.uploaded  # They owe us for our uploading
         rate -= 2 ** client.distrust_rate
         rate += random.randint(1, 100)  # Helps to shuffle clients in the beginning
+
+        if peer in self._peer_hanged_time and \
+            time.time() - self._peer_hanged_time[peer] <= TorrentManager.HANG_PENALTY_DURATION:
+            rate //= TorrentManager.HANG_PENALTY_COEFF
+
+        return rate
+
+    def get_peer_upload_rate(self, peer: Peer) -> int:
+        client = self._peer_clients[peer]
+
+        rate = client.downloaded  # We owe them for downloading
+        if self.download_complete:
+            rate += client.uploaded  # To reach maximal upload speed
+        rate -= 2 ** client.distrust_rate
+        rate += random.randint(1, 100)  # Helps to shuffle clients in the beginning
+
         return rate
 
     def get_piece_order_rate(self, index: int):
@@ -214,8 +227,6 @@ class TorrentManager:
 
         return await self._select_piece_to_download()
 
-    DOWNLOAD_PEER_COUNT = 20
-    TASK_STAYING_TO_REQUEST_MORE_PEERS = 15
     DOWNLOAD_REQUEST_QUEUE_SIZE = 10
 
     async def _consume_requests(self, processed_requests: List[BlockRequest],
@@ -233,7 +244,7 @@ class TorrentManager:
             raise NotEnoughPeersError('No peers to perform a request')
 
         self._request_deque.popleft()
-        performer = max(available_peers, key=self.get_peer_rate)
+        performer = max(available_peers, key=self.get_peer_download_rate)
         client = self._peer_clients[performer]
 
         request = first_request
@@ -253,11 +264,14 @@ class TorrentManager:
             self._request_deque.popleft()
         return performer
 
+    DOWNLOAD_PEER_COUNT = 20
+    DOWNLOAD_PEERS_ACTIVE_TO_REQUEST_MORE_PEERS = 2
     NOT_ENOUGH_PEERS_SLEEP_TIME = 5
 
     async def _wait_more_peers(self):
         self._tasks_waiting_for_more_peers += 1
-        if self._tasks_waiting_for_more_peers >= TorrentManager.TASK_STAYING_TO_REQUEST_MORE_PEERS and \
+        download_peers_active = TorrentManager.DOWNLOAD_PEER_COUNT - self._tasks_waiting_for_more_peers
+        if download_peers_active <= TorrentManager.DOWNLOAD_PEERS_ACTIVE_TO_REQUEST_MORE_PEERS and \
                 len(self._peer_clients) < TorrentManager.MAX_PEERS_TO_ACTIVELY_CONNECT:
             self._more_peers_requested.set()
 
@@ -362,7 +376,7 @@ class TorrentManager:
                                    self._our_peer_id, peer)
             self._client_executors.append(asyncio.ensure_future(self._execute_peer_client(peer, client)))
 
-    DEFAULT_MIN_INTERVAL = 120
+    DEFAULT_MIN_INTERVAL = 45
 
     async def _execute_regular_announcements(self):
         try:
@@ -403,10 +417,72 @@ class TorrentManager:
 
         await asyncio.wait(self._request_executors)
 
-        assert download_info.downloaded_piece_count == len(self._pieces_to_download)
+        assert self.download_complete
         await self._tracker_client.announce('completed')
         logger.info('file download complete')
         # TODO: disconnect from seeders (maybe), connect to new peers, upload
+
+    CHOKING_CHANGING_TIME = 10
+    UPLOAD_PEER_COUNT = 4
+
+    ITERS_PER_OPTIMISTIC_UNCHOKING = 3
+    CONNECTED_RECENTLY_THRESHOLD = 60
+    CONNECTED_RECENTLY_COEFF = 3
+
+    def _select_optimistically_unchoked(self, peers: Iterable[Peer]) -> Peer:
+        cur_time = time.time()
+        connected_recently = []
+        remaining_peers = []
+        for peer in peers:
+            if cur_time - self._peer_connected_time[peer] <= TorrentManager.CONNECTED_RECENTLY_THRESHOLD:
+                connected_recently.append(peer)
+            else:
+                remaining_peers.append(peer)
+
+        max_index = len(remaining_peers) + TorrentManager.CONNECTED_RECENTLY_COEFF * len(connected_recently) - 1
+        index = random.randint(0, max_index)
+        if index < len(remaining_peers):
+            return remaining_peers[index]
+        return connected_recently[(index - len(remaining_peers)) // len(connected_recently)]
+
+    async def _execute_uploading(self):
+        prev_unchoked_peers = set()
+        optimistically_unchoked = None
+        for i in itertools.count():
+            alive_peers = list(sorted(self._peer_clients.keys(), key=self.get_peer_upload_rate, reverse=True))
+            cur_unchoked_peers = set()
+            interested_count = 0
+
+            if TorrentManager.UPLOAD_PEER_COUNT:
+                if i % TorrentManager.ITERS_PER_OPTIMISTIC_UNCHOKING == 0:
+                    if alive_peers:
+                        optimistically_unchoked = self._select_optimistically_unchoked(alive_peers)
+                    else:
+                        optimistically_unchoked = None
+
+                if optimistically_unchoked is not None and optimistically_unchoked in self._peer_clients:
+                    cur_unchoked_peers.add(optimistically_unchoked)
+                    if self._peer_clients[optimistically_unchoked].peer_interested:
+                        interested_count += 1
+
+            for peer in cast(List[Peer], alive_peers):
+                if interested_count == TorrentManager.UPLOAD_PEER_COUNT:
+                    break
+                if self._peer_clients[peer].peer_interested:
+                    interested_count += 1
+
+                cur_unchoked_peers.add(peer)
+
+            for peer in prev_unchoked_peers - cur_unchoked_peers:
+                if peer in self._peer_clients:
+                    self._peer_clients[peer].am_choking = True
+            for peer in cur_unchoked_peers:
+                self._peer_clients[peer].am_choking = False
+            logger.debug('now %s peers are unchoked', len(cur_unchoked_peers))
+
+            await asyncio.sleep(TorrentManager.CHOKING_CHANGING_TIME)
+
+            prev_unchoked_peers = cur_unchoked_peers
 
     async def run(self, pieces_to_download: Sequence[int]=None):
         download_info = self._torrent_info.download_info
@@ -420,13 +496,22 @@ class TorrentManager:
         self._connect_to_peers(self._tracker_client.peers, False)
 
         self._announcement_executor = asyncio.ensure_future(self._execute_regular_announcements())
+        self._uploading_executor = asyncio.ensure_future(self._execute_uploading())
 
         await self._download()
+
+    @property
+    def download_complete(self):
+        download_info = self._torrent_info.download_info
+
+        return download_info.downloaded_piece_count == len(self._pieces_to_download)
 
     async def stop(self):
         executors = self._request_executors
         if self._announcement_executor is not None:
             executors.append(self._announcement_executor)
+        if self._uploading_executor:
+            executors.append(self._uploading_executor)
         executors += self._client_executors
 
         for task in executors:

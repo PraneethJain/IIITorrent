@@ -251,17 +251,18 @@ class PeerTCPClient:
             if length > PeerTCPClient.MAX_REQUEST_LENGTH:
                 raise ValueError('Requested {} bytes, but the current policy allows to accept requests '
                                  'of not more than {} bytes'.format(length, PeerTCPClient.MAX_REQUEST_LENGTH))
-
             if (self._am_choking or not self._peer_interested or
                     not self._download_info.piece_downloaded[piece_index]):
-                # We shouldn't disconnect in case of request of unready piece
-                # because, for example, its download flag can be removed for some reasons
+                # If peer isn't interested but requesting, their peer_interested flag wasn't considered
+                # when selecting who to unchoke, so we may be not ready to upload to them.
+                # If requested piece is not downloaded yet, we shouldn't disconnect because our piece_downloaded flag
+                # could be removed because of file corruption.
                 return
-            # FIXME: Check that one block isn't requested for many times?
-            # or that there's not requested too many blocks?
+
             # FIXME: Check here if block hasn't been cancelled. We need sure that cancel message can be received
-            # FIXME: (run this as a task? avoid DoS in implementing; we should can receive and send "simultaneously")
             self._send_block(request)
+            await self.drain()
+            self._logger.info('block sent')
         elif message_id == MessageType.cancel:
             pass
 

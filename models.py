@@ -104,11 +104,11 @@ class DownloadInfo:
         self._piece_downloaded = bitarray(piece_count)
         self._piece_downloaded.setall(False)
         self._downloaded_piece_count = 0
-        self._interesting_pieces = set()
 
         blocks_per_piece = ceil(piece_length / DownloadInfo.MARKED_BLOCK_SIZE)
         self._piece_block_downloaded = [None] * piece_count * blocks_per_piece  # type: List[Optional[bitarray]]
 
+        self._interesting_pieces = set()
         self._piece_blocks_expected = [set() for _ in range(self.piece_count)]
         self.total_uploaded = 0
         self.total_downloaded = 0
@@ -131,6 +131,7 @@ class DownloadInfo:
                    private=dictionary.get('private', False))
 
     def reset_run_state(self):
+        self._interesting_pieces.clear()
         for requests in self._piece_blocks_expected:
             if requests is not None:
                 requests.clear()
