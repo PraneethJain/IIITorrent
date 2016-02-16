@@ -2,7 +2,7 @@ import asyncio
 import copy
 import logging
 import pickle
-from typing import Dict
+from typing import Dict, List
 
 from models import generate_peer_id, TorrentInfo
 from peer_tcp_server import PeerTCPServer
@@ -24,9 +24,14 @@ class ControlManager:
 
         self._torrent_manager_executors = {}  # type: Dict[bytes, asyncio.Task]
 
-    @property
-    def torrents(self) -> Dict[bytes, TorrentInfo]:
-        return self._torrents
+    def get_torrents(self) -> List[TorrentInfo]:
+        result = []
+        for manager, torrent_info in self._torrents.items():
+            torrent_info = copy.copy(torrent_info)
+            torrent_info.download_info = copy.copy(torrent_info.download_info)
+            torrent_info.download_info.reset_run_state()
+            result.append(torrent_info)
+        return result
 
     async def start(self):
         await self._server.start()
@@ -94,12 +99,7 @@ class ControlManager:
         torrent_info.paused = True
 
     def dump(self, f):
-        torrent_list = []
-        for manager, torrent_info in self._torrents.items():
-            torrent_info = copy.copy(torrent_info)
-            torrent_info.download_info = copy.copy(torrent_info.download_info)
-            torrent_info.download_info.reset_run_state()
-            torrent_list.append(torrent_info)
+        torrent_list = self.get_torrents()
 
         pickle.dump(torrent_list, f)
 

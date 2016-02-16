@@ -128,8 +128,7 @@ class DownloadInfo:
         self._piece_selected.setall(True)
         # TODO: Download only some files
 
-        blocks_per_piece = ceil(piece_length / DownloadInfo.MARKED_BLOCK_SIZE)
-        self._piece_block_downloaded = [None] * piece_count * blocks_per_piece  # type: List[Optional[bitarray]]
+        self._piece_block_downloaded = [None] * piece_count  # type: List[Optional[bitarray]]
 
         self._host_distrust_rates = {}
 

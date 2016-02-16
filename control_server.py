@@ -1,5 +1,8 @@
 import asyncio
 import logging
+import pickle
+import struct
+from typing import Any, cast, Callable
 
 from control_manager import ControlManager
 
@@ -17,31 +20,56 @@ class ControlServer:
 
     HANDSHAKE_MESSAGE = b'bit-torrent:ControlServer\n'
 
+    LENGTH_FMT = '!I'
+
+    @staticmethod
+    async def receive_object(reader: asyncio.StreamReader) -> Any:
+        length_data = await reader.readexactly(struct.calcsize(ControlServer.LENGTH_FMT))
+        (length,) = struct.unpack(ControlServer.LENGTH_FMT, length_data)
+        data = await reader.readexactly(length)
+        return pickle.loads(data)
+
+    @staticmethod
+    def send_object(obj: Any, writer: asyncio.StreamWriter):
+        data = pickle.dumps(obj)
+        length_data = struct.pack(ControlServer.LENGTH_FMT, len(data))
+        writer.write(length_data)
+        writer.write(data)
+
     async def _accept(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         addr_repr = ':'.join(map(str, writer.get_extra_info('peername')))
         logger.info('accepted connection from %s', addr_repr)
 
-        writer.write(ControlServer.HANDSHAKE_MESSAGE)
-
         try:
-            for info_hash in self._control.torrents:
-                if not self._flag:
-                    await self._control.pause(info_hash)
-                else:
-                    self._control.resume(info_hash)
-            self._flag = not self._flag
-            writer.write(b'success\n')
+            writer.write(ControlServer.HANDSHAKE_MESSAGE)
+
+            while True:
+                action = cast(Callable[[ControlManager], Any], await ControlServer.receive_object(reader))
+
+                try:
+                    result = action(self._control)
+                    if asyncio.iscoroutine(result):
+                        result = await result
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    result = e
+
+                ControlServer.send_object(result, writer)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            writer.write(repr(e).encode() + b'\n')
+            logger.info('%s disconnected because of %s', addr_repr, repr(e))
+        finally:
+            writer.close()
 
-        writer.close()
-
+    HOST = '127.0.0.1'
     PORT_RANGE = range(6991, 6999 + 1)
 
     async def start(self):
         for port in ControlServer.PORT_RANGE:
             try:
-                self._server = await asyncio.start_server(self._accept, host='127.0.0.1', port=port)
+                self._server = await asyncio.start_server(self._accept, host=ControlServer.HOST, port=port)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
