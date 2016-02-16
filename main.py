@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+import os
+import pickle
 import signal
 import sys
 
@@ -11,36 +13,47 @@ from torrent_manager import TorrentManager
 
 DOWNLOAD_DIR = 'downloads'
 
+STATE_FILENAME = 'state.bin'
+
 
 logging.basicConfig(format='%(levelname)s %(asctime)s %(name)-23s %(message)s', datefmt='%H:%M:%S')
 
-
-async def execute_download(manager: TorrentManager):
-    try:
-        await manager.download()
-    finally:
-        await manager.stop()
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 
 def main():
-    torrent_filename = sys.argv[1]
+    if os.path.isfile(STATE_FILENAME):
+        with open(STATE_FILENAME, 'rb') as f:
+            torrent_info = pickle.load(f)
+        logger.info('state recovered')
+    else:
+        torrent_filename = sys.argv[1]
+        torrent_info = TorrentInfo.from_file(torrent_filename)
+        logger.info('new torrent loaded')
 
-    torrent_info = TorrentInfo.from_file(torrent_filename)
     our_peer_id = generate_peer_id()
-
-    torrent_manager = TorrentManager(torrent_info, our_peer_id, DOWNLOAD_DIR)
+    manager = TorrentManager(torrent_info, our_peer_id, DOWNLOAD_DIR)
 
     loop = asyncio.get_event_loop()
-    manager_task = asyncio.ensure_future(execute_download(torrent_manager))
+    manager_task = asyncio.ensure_future(manager.run())
+
+    def signal_handler():
+        manager_task.cancel()
+        stop_task = asyncio.ensure_future(manager.stop())
+        stop_task.add_done_callback(lambda fut: loop.stop())
 
     for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, manager_task.cancel)
+        loop.add_signal_handler(sig, signal_handler)
 
     try:
-        loop.run_until_complete(manager_task)
-    except asyncio.CancelledError:
-        pass
+        loop.run_forever()
     finally:
+        torrent_info.download_info.reset_run_state()
+        with open(STATE_FILENAME, 'wb') as f:
+            pickle.dump(torrent_info, f)
+        logger.info('state saved')
+
         loop.close()
 
 
