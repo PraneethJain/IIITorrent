@@ -88,10 +88,6 @@ class PeerTCPClient:
 
         self._logger.debug('handshake performed')
 
-    def _send_bitfield(self):
-        if self._download_info.downloaded_piece_count:
-            self._send_message(MessageType.bitfield, self._download_info.piece_downloaded.tobytes())
-
     async def connect(self, streams: Tuple[asyncio.StreamReader, asyncio.StreamWriter]=None):
         if streams is None:
             self._logger.debug('trying to connect')
@@ -109,6 +105,42 @@ class PeerTCPClient:
             raise
 
         self._connected = True
+
+    MAX_MESSAGE_LENGTH = 2 ** 18
+
+    async def _receive_message(self) -> Optional[Tuple[MessageType, memoryview]]:
+        data = await asyncio.wait_for(self._reader.readexactly(4), PeerTCPClient.MAX_SILENCE_DURATION)
+        (length,) = struct.unpack('!I', data)
+        if length == 0:  # keep-alive
+            return None
+        if length > PeerTCPClient.MAX_MESSAGE_LENGTH:
+            raise ValueError('Message length is too big')
+
+        data = await asyncio.wait_for(self._reader.readexactly(length), PeerTCPClient.READ_TIMEOUT)
+        try:
+            message_id = MessageType(data[0])
+        except ValueError:
+            self._logger.debug('Unknown message type %s', data[0])
+            return None
+        payload = memoryview(data)[1:]
+
+        self._logger.debug('incoming message %s length=%s', message_id.name, length)
+
+        return message_id, payload
+
+    _KEEP_ALIVE_MESSAGE = b'\0' * 4
+
+    def _send_message(self, message_id: MessageType=None, *payload: List[bytes]):
+        if message_id is None:  # keep-alive
+            self._writer.write(PeerTCPClient._KEEP_ALIVE_MESSAGE)
+            return
+
+        length = sum(len(portion) for portion in payload) + 1
+        self._logger.debug('outcoming message %s length=%s', message_id.name, length)
+
+        self._writer.write(struct.pack('!IB', length, message_id.value))
+        for portion in payload:
+            self._writer.write(portion)
 
     @property
     def am_choking(self):
@@ -158,40 +190,6 @@ class PeerTCPClient:
 
     def increase_distrust(self):
         self._distrust_rate += 1
-
-    MAX_MESSAGE_LENGTH = 2 ** 18
-
-    async def _receive_message(self) -> Optional[Tuple[MessageType, memoryview]]:
-        data = await asyncio.wait_for(self._reader.readexactly(4), PeerTCPClient.MAX_SILENCE_DURATION)
-        (length,) = struct.unpack('!I', data)
-        if length == 0:  # keep-alive
-            return None
-        if length > PeerTCPClient.MAX_MESSAGE_LENGTH:
-            raise ValueError('Message length is too big')
-
-        data = await asyncio.wait_for(self._reader.readexactly(length), PeerTCPClient.READ_TIMEOUT)
-        try:
-            message_id = MessageType(data[0])
-        except ValueError:
-            self._logger.debug('Unknown message type %s', data[0])
-            return None
-        payload = memoryview(data)[1:]
-
-        self._logger.debug('incoming message %s length=%s', message_id.name, length)
-
-        return message_id, payload
-
-    def _send_message(self, message_id: MessageType=None, *payload: List[bytes]):
-        if message_id is None:  # keep-alive
-            self._writer.write('\0' * 4)
-
-        length = sum(len(portion) for portion in payload) + 1
-
-        self._logger.debug('outcoming message %s length=%s', message_id.name, length)
-
-        self._writer.write(struct.pack('!IB', length, message_id.value))
-        for portion in payload:
-            self._writer.write(portion)
 
     @staticmethod
     def _check_payload_len(message_id: MessageType, payload: memoryview, expected_len: int):
@@ -243,15 +241,6 @@ class PeerTCPClient:
         if (request.block_begin < 0 or request.block_begin + request.block_length > self._download_info.piece_length or
                 end_offset > self._download_info.total_size):
             raise IndexError('Position in piece out of range')
-
-    def _send_block(self, request: BlockRequest):
-        block = self._file_structure.read(
-            request.piece_index * self._download_info.piece_length + request.block_begin, request.block_length)
-
-        self._send_message(MessageType.piece, struct.pack('!2I', request.piece_index, request.block_begin), block)
-
-        self._uploaded += request.block_length
-        self._download_info.total_uploaded += request.block_length
 
     async def _process_requests(self, message_id: MessageType, payload: memoryview):
         piece_index, begin, length = struct.unpack('!3I', cast(bytes, payload))
@@ -323,6 +312,13 @@ class PeerTCPClient:
                 PeerTCPClient._check_payload_len(message_id, payload, 2)
                 # TODO: Ignore or implement DHT
 
+    def send_keep_alive(self):
+        self._send_message(None)
+
+    def _send_bitfield(self):
+        if self._download_info.downloaded_piece_count:
+            self._send_message(MessageType.bitfield, self._download_info.piece_downloaded.tobytes())
+
     def send_have(self, piece_index: int):
         self._send_message(MessageType.have, struct.pack('!I', piece_index))
 
@@ -332,6 +328,15 @@ class PeerTCPClient:
 
         self._send_message(MessageType.request,
                            struct.pack('!3I', request.piece_index, request.block_begin, request.block_length))
+
+    def _send_block(self, request: BlockRequest):
+        block = self._file_structure.read(
+            request.piece_index * self._download_info.piece_length + request.block_begin, request.block_length)
+
+        self._send_message(MessageType.piece, struct.pack('!2I', request.piece_index, request.block_begin), block)
+
+        self._uploaded += request.block_length
+        self._download_info.total_uploaded += request.block_length
 
     async def drain(self):
         await asyncio.wait_for(self._writer.drain(), PeerTCPClient.WRITE_TIMEOUT)

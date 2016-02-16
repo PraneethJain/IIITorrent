@@ -41,6 +41,7 @@ class TorrentManager:
 
         self._server = None
         self._client_executors = []              # type: List[asyncio.Task]
+        self._keeping_alive_executor = None      # type: Optional[asyncio.Task]
         self._announcement_executor = None       # type: Optional[asyncio.Task]
         self._uploading_executor = None          # type: Optional[asyncio.Task]
         self._request_executors = []             # type: List[asyncio.Task]
@@ -80,6 +81,16 @@ class TorrentManager:
             raise
         except Exception as e:
             logger.debug('%s disconnected because of %s', peer, repr(e))
+
+    KEEP_ALIVE_TIMEOUT = 2 * 60
+
+    async def _execute_keeping_alive(self):
+        while True:
+            await asyncio.sleep(TorrentManager.KEEP_ALIVE_TIMEOUT)
+
+            logger.debug('broadcasting keep-alives to %s alive peers', len(self._peer_clients))
+            for client in self._peer_clients.values():
+                client.send_keep_alive()
 
     REQUEST_LENGTH = 2 ** 14
 
@@ -540,6 +551,7 @@ class TorrentManager:
 
         self._connect_to_peers(self._tracker_client.peers, False)
 
+        self._keeping_alive_executor = asyncio.ensure_future(self._execute_keeping_alive())
         self._announcement_executor = asyncio.ensure_future(self._execute_regular_announcements())
         self._uploading_executor = asyncio.ensure_future(self._execute_uploading())
 
@@ -557,8 +569,9 @@ class TorrentManager:
             await self._server.wait_closed()
             self._server = None
 
-        executors = self._request_executors + [self._uploading_executor, self._announcement_executor] + \
-                    self._client_executors
+        executors = (self._request_executors +
+                     [self._uploading_executor, self._announcement_executor, self._keeping_alive_executor] +
+                     self._client_executors)
         executors = [task for task in executors if task is not None]
 
         for task in executors:
@@ -572,6 +585,7 @@ class TorrentManager:
         self._executors_processed_requests.clear()
         self._uploading_executor = None
         self._announcement_executor = None
+        self._keeping_alive_executor = None
         self._client_executors.clear()
 
         self._tracker_client.close()
