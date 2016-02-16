@@ -12,7 +12,6 @@ from file_structure import FileStructure
 from models import BlockRequestFuture, Peer, TorrentInfo
 from peer_tcp_client import PeerTCPClient, SeedError
 from tracker_http_client import TrackerHTTPClient
-from utils import check_time
 
 
 logger = logging.getLogger(__name__)
@@ -125,8 +124,7 @@ class TorrentManager:
 
     async def _flush_piece(self, index: int):
         piece_offset, cur_piece_length = self._get_piece_position(index)
-        with check_time('flush'):
-            await self._file_structure.flush(piece_offset, cur_piece_length)
+        await self._file_structure.flush(piece_offset, cur_piece_length)
 
     FLAG_TRANSMISSION_TIMEOUT = 0.5
 
@@ -187,9 +185,8 @@ class TorrentManager:
         assert self._download_info.is_all_piece_blocks_downloaded(piece_index)
 
         piece_offset, cur_piece_length = self._get_piece_position(piece_index)
-        with check_time('hash calculation'):
-            data = await self._file_structure.read(piece_offset, cur_piece_length)
-            actual_digest = hashlib.sha1(data).digest()
+        data = await self._file_structure.read(piece_offset, cur_piece_length)
+        actual_digest = hashlib.sha1(data).digest()
         if actual_digest == self._download_info.piece_hashes[piece_index]:
             await self._flush_piece(piece_index)
             self._finish_downloading_piece(piece_index)
@@ -299,10 +296,9 @@ class TorrentManager:
                 if len(result) == count:
                     return result
 
-            with check_time('selecting new piece'):
-                piece_stock = len(self._piece_block_queue) - len(consumed_pieces)
-                piece_stock_small = (piece_stock < TorrentManager.DESIRED_PIECE_STOCK)
-                new_piece_index = self._select_new_piece(force=piece_stock_small)
+            piece_stock = len(self._piece_block_queue) - len(consumed_pieces)
+            piece_stock_small = (piece_stock < TorrentManager.DESIRED_PIECE_STOCK)
+            new_piece_index = self._select_new_piece(force=piece_stock_small)
             if new_piece_index is not None:
                 self._non_started_pieces.remove(new_piece_index)
                 self._start_downloading_piece(new_piece_index)

@@ -9,7 +9,6 @@ from bitarray import bitarray
 
 from file_structure import FileStructure
 from models import DownloadInfo, Peer, SHA1_DIGEST_LEN, BlockRequest
-from utils import check_time
 
 CLIENT_LOGGER_LEVEL = logging.INFO
 
@@ -299,11 +298,9 @@ class PeerTCPClient:
         self._downloaded += block_length
         self._download_info.total_downloaded += block_length
 
-        with check_time('write'):
-            await self._file_structure.write(piece_index * self._download_info.piece_length + block_begin, block_data)
+        await self._file_structure.write(piece_index * self._download_info.piece_length + block_begin, block_data)
 
-        with check_time('marking of downloaded blocks'):
-            self._download_info.mark_downloaded_blocks(self._peer, request)
+        self._download_info.mark_downloaded_blocks(self._peer, request)
         self._download_info.piece_sources[piece_index].add(self._peer)
 
     async def run(self):
