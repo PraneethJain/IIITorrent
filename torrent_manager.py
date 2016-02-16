@@ -64,6 +64,9 @@ class TorrentManager:
         self._endgame_mode = False
         # TODO: Send cancels in endgame mode
 
+        self._tasks_waiting_for_more_peers = 0
+        self._more_peers_requested = asyncio.Event()
+
         self._file_structure = FileStructure(download_dir, torrent_info.download_info)
 
     async def _execute_peer_client(self, peer: Peer, client: PeerTCPClient):
@@ -226,6 +229,7 @@ class TorrentManager:
         return await self._select_piece_to_download()
 
     DOWNLOAD_PEER_COUNT = 20
+    TASK_STAYING_TO_REQUEST_MORE_PEERS = 15
     DOWNLOAD_REQUEST_QUEUE_SIZE = 10
 
     async def _consume_requests(self, processed_requests: List[BlockRequest],
@@ -263,8 +267,33 @@ class TorrentManager:
             self._request_deque.popleft()
         return performer
 
-    NO_REQUESTS_SLEEP_TIME = 2
     NOT_ENOUGH_PEERS_SLEEP_TIME = 5
+
+    async def _wait_more_peers(self):
+        self._tasks_waiting_for_more_peers += 1
+        if self._tasks_waiting_for_more_peers >= TorrentManager.TASK_STAYING_TO_REQUEST_MORE_PEERS and \
+                len(self._peer_clients) < TorrentManager.MAX_PEERS_TO_ACTIVELY_CONNECT:
+            self._more_peers_requested.set()
+
+        # TODO: Maybe start another piece?
+        await asyncio.sleep(TorrentManager.NOT_ENOUGH_PEERS_SLEEP_TIME)
+        self._tasks_waiting_for_more_peers -= 1
+
+    NO_REQUESTS_SLEEP_TIME = 2
+
+    async def _wait_more_requests(self):
+        download_info = self._torrent_info.download_info
+
+        if not self._endgame_mode:
+            non_finished_pieces = [i for i in range(download_info.piece_count)
+                                   if not download_info.piece_downloaded[i]]
+            logger.info('entering endgame mode (remaining pieces: %s)',
+                        ', '.join(map(str, non_finished_pieces)))
+            self._endgame_mode = True
+
+        # TODO: maybe use some signals instead of sleeping
+        logger.debug('no requests to process, sleeping')
+        await asyncio.sleep(TorrentManager.NO_REQUESTS_SLEEP_TIME)
 
     REQUEST_TIMEOUT = 6
     REQUEST_TIMEOUT_ENDGAME = 1
@@ -283,27 +312,14 @@ class TorrentManager:
             except NotEnoughPeersError:
                 cur_performer = None
                 if not processed_requests:
-                    # TODO: Request more peers in some cases (but not too often)
-                    #       It should be implemented in announce task, that must wake up this task on case of new peers
-                    # TODO: Maybe start another piece?
-                    await asyncio.sleep(TorrentManager.NOT_ENOUGH_PEERS_SLEEP_TIME)
+                    await self._wait_more_peers()
                     continue
             except NoRequestsError:
                 cur_performer = None
                 if not processed_requests:
                     if not any(self._executors_processed_requests):
                         return
-
-                    if not self._endgame_mode:
-                        non_finished_pieces = [i for i in range(download_info.piece_count)
-                                               if not download_info.piece_downloaded[i]]
-                        logger.info('entering endgame mode (remaining pieces: %s)',
-                                    ', '.join(map(str, non_finished_pieces)))
-                        self._endgame_mode = True
-
-                    # TODO: maybe use some signals instead of sleeping
-                    logger.debug('no requests to process, sleeping')
-                    await asyncio.sleep(TorrentManager.NO_REQUESTS_SLEEP_TIME)
+                    await self._wait_more_requests()
                     continue
 
             assert prev_performer is not None or cur_performer is not None  # Because processed_requests != []
@@ -344,26 +360,45 @@ class TorrentManager:
             self._peers_busy.remove(cur_performer)
             prev_performer = cur_performer
 
-    MAX_PEERS_TO_CONNECT = 30
+    MAX_PEERS_TO_ACTIVELY_CONNECT = 30
     MAX_PEERS_TO_ACCEPT = 55
 
-    def _connect_to_peers(self, peers: Sequence[Peer]):
+    def _connect_to_peers(self, peers: Sequence[Peer], force: bool):
         peers = list({peer for peer in peers if peer not in self._peer_clients})
-        peers_to_connect_count = max(TorrentManager.MAX_PEERS_TO_CONNECT - len(self._peer_clients), 0)
-        logger.debug('connecting to %s new peers', min(len(peers), peers_to_connect_count))
+        if force:
+            max_peers_count = TorrentManager.MAX_PEERS_TO_ACCEPT
+        else:
+            max_peers_count = TorrentManager.MAX_PEERS_TO_ACTIVELY_CONNECT
+        peers_to_connect_count = max(max_peers_count - len(self._peer_clients), 0)
+        logger.debug('connecting to up to %s new peers', min(len(peers), peers_to_connect_count))
 
         for peer in peers[:peers_to_connect_count]:
             client = PeerTCPClient(self._torrent_info.download_info, self._file_structure,
                                    self._our_peer_id, peer)
             self._client_executors.append(asyncio.ensure_future(self._execute_peer_client(peer, client)))
 
+    DEFAULT_MIN_INTERVAL = 60
+
     async def _execute_regular_announcements(self):
         try:
             while True:
-                await asyncio.sleep(self._tracker_client.interval)
+                if self._tracker_client.min_interval is not None:
+                    min_interval = self._tracker_client.min_interval
+                else:
+                    min_interval = min(TorrentManager.DEFAULT_MIN_INTERVAL, self._tracker_client.interval)
+                await asyncio.sleep(min_interval)
+
+                default_interval = self._tracker_client.interval
+                try:
+                    await asyncio.wait_for(asyncio.shield(self._more_peers_requested.wait()),
+                                           default_interval - min_interval)
+                    more_peers = True
+                    self._more_peers_requested.clear()
+                except asyncio.TimeoutError:
+                    more_peers = False
 
                 await self._tracker_client.announce(None)
-                self._connect_to_peers(self._tracker_client.peers)
+                self._connect_to_peers(self._tracker_client.peers, more_peers)
         finally:
             await self._tracker_client.announce('stopped')
 
@@ -374,7 +409,7 @@ class TorrentManager:
         random.shuffle(self._non_started_pieces)
 
         await self._tracker_client.announce('started')
-        self._connect_to_peers(self._tracker_client.peers)
+        self._connect_to_peers(self._tracker_client.peers, False)
 
         for _ in range(TorrentManager.DOWNLOAD_PEER_COUNT):
             processed_requests = []

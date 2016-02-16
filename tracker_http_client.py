@@ -92,6 +92,8 @@ class TrackerHTTPClient:
         self.interval = response[b'interval']
         if b'min interval' in response:
             self.min_interval = response[b'min interval']
+            if self.min_interval > self.interval:
+                raise ValueError('Tracker returned min_interval that is greater than a default interval')
 
         self._handle_optional_response_fields(response)
 
