@@ -88,6 +88,10 @@ class PeerTCPClient:
 
         self._logger.debug('handshake performed')
 
+    def _send_bitfield(self):
+        if self._download_info.downloaded_piece_count:
+            self._send_message(MessageType.bitfield, self._download_info.piece_downloaded.tobytes())
+
     async def connect(self, streams: Tuple[asyncio.StreamReader, asyncio.StreamWriter]=None):
         if streams is None:
             self._logger.debug('trying to connect')
@@ -99,6 +103,7 @@ class PeerTCPClient:
 
         try:
             await self._perform_handshake()
+            self._send_bitfield()
         except:
             self.close()
             raise
@@ -268,7 +273,6 @@ class PeerTCPClient:
             # FIXME: Check here if block hasn't been cancelled. We need sure that cancel message can be received
             self._send_block(request)
             await self.drain()
-            self._logger.info('block sent')
         elif message_id == MessageType.cancel:
             pass
 

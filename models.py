@@ -5,7 +5,7 @@ import socket
 import struct
 from collections import OrderedDict
 from math import ceil
-from typing import List, MutableSet, MutableSequence, cast, Optional
+from typing import List, MutableSet, cast, Optional
 
 import bencodepy
 from bitarray import bitarray
@@ -101,7 +101,7 @@ class DownloadInfo:
 
         self._piece_owners = [set() for _ in range(piece_count)]
         self._piece_sources = [set() for _ in range(piece_count)]
-        self._piece_downloaded = bitarray(piece_count)
+        self._piece_downloaded = bitarray(piece_count, endian='big')
         self._piece_downloaded.setall(False)
         self._downloaded_piece_count = 0
 
@@ -169,7 +169,7 @@ class DownloadInfo:
         return self._piece_sources
 
     @property
-    def piece_downloaded(self) -> MutableSequence[bool]:
+    def piece_downloaded(self) -> bitarray:
         return self._piece_downloaded
 
     @property

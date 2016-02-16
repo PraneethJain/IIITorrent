@@ -392,7 +392,7 @@ class TorrentManager:
         self._client_executors.append(asyncio.ensure_future(self._execute_peer_client(peer, client,
                                                                                       (reader, writer))))
 
-    DEFAULT_MIN_INTERVAL = 45
+    DEFAULT_MIN_INTERVAL = 30
 
     async def _try_to_announce(self, event: Optional[str]) -> bool:
         try:
@@ -471,6 +471,8 @@ class TorrentManager:
         return connected_recently[(index - len(remaining_peers)) % len(connected_recently)]
 
     async def _execute_uploading(self):
+        download_info = self._torrent_info.download_info
+
         prev_unchoked_peers = set()
         optimistically_unchoked = None
         for i in itertools.count():
@@ -503,7 +505,8 @@ class TorrentManager:
                     self._peer_clients[peer].am_choking = True
             for peer in cur_unchoked_peers:
                 self._peer_clients[peer].am_choking = False
-            logger.debug('now %s peers are unchoked', len(cur_unchoked_peers))
+            logger.debug('now %s peers are unchoked (total_uploaded = %.1f MiB)',
+                         len(cur_unchoked_peers), download_info.total_uploaded / TrackerHTTPClient.BYTES_PER_MIB)
 
             await asyncio.sleep(TorrentManager.CHOKING_CHANGING_TIME)
 
