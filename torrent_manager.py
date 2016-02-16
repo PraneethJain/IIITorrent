@@ -57,6 +57,8 @@ class TorrentManager:
         self._download_info = torrent_info.download_info  # type: DownloadInfo
         self._download_info.reset_run_state()
         self._download_info.reset_stats()
+        self._statistics = self._download_info.session_statistics
+
         self._our_peer_id = our_peer_id
         self._server_port = server_port
 
@@ -95,7 +97,7 @@ class TorrentManager:
                 client.confirm_info_hash(self._download_info, self._file_structure)
 
             self._peer_data[peer] = PeerData(client, time.time())
-            self._download_info.peer_count += 1
+            self._statistics.peer_count += 1
 
             await client.run()
         except asyncio.CancelledError:
@@ -104,16 +106,16 @@ class TorrentManager:
             self._logger.debug('%s disconnected because of %s', peer, repr(e))
         finally:
             if peer in self._peer_data:
-                self._download_info.peer_count -= 1
+                self._statistics.peer_count -= 1
                 del self._peer_data[peer]
 
                 for info in self._download_info.pieces:
                     if peer in info.owners:
                         info.owners.remove(peer)
-                if peer in self._download_info.peer_last_download:
-                    del self._download_info.peer_last_download[peer]
-                if peer in self._download_info.peer_last_upload:
-                    del self._download_info.peer_last_upload[peer]
+                if peer in self._statistics.peer_last_download:
+                    del self._statistics.peer_last_download[peer]
+                if peer in self._statistics.peer_last_upload:
+                    del self._statistics.peer_last_upload[peer]
 
             client.close()
 
@@ -573,7 +575,7 @@ class TorrentManager:
             for peer in cur_unchoked_peers:
                 self._peer_data[peer].client.am_choking = False
             self._logger.debug('now %s peers are unchoked (total_uploaded = %s)', len(cur_unchoked_peers),
-                               humanize_size(self._download_info.total_uploaded))
+                               humanize_size(self._statistics.total_uploaded))
 
             await asyncio.sleep(TorrentManager.CHOKING_CHANGING_TIME)
 
@@ -590,15 +592,15 @@ class TorrentManager:
         downloaded_queue = deque()
         uploaded_queue = deque()
         while True:
-            downloaded_queue.append(self._download_info.downloaded_per_session)
-            uploaded_queue.append(self._download_info.uploaded_per_session)
+            downloaded_queue.append(self._statistics.downloaded_per_session)
+            uploaded_queue.append(self._statistics.uploaded_per_session)
 
             if len(downloaded_queue) > 1:
                 period_in_seconds = (len(downloaded_queue) - 1) * TorrentManager.SPEED_UPDATE_TIMEOUT
                 downloaded_per_period = downloaded_queue[-1] - downloaded_queue[0]
                 uploaded_per_period = uploaded_queue[-1] - uploaded_queue[0]
-                self._download_info.download_speed = downloaded_per_period / period_in_seconds
-                self._download_info.upload_speed = uploaded_per_period / period_in_seconds
+                self._statistics.download_speed = downloaded_per_period / period_in_seconds
+                self._statistics.upload_speed = uploaded_per_period / period_in_seconds
 
             if len(downloaded_queue) > max_queue_length:
                 downloaded_queue.popleft()

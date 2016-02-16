@@ -6,7 +6,7 @@ from typing import List, Optional, cast, Sequence
 import aiohttp
 import bencodepy
 
-from models import TorrentInfo, Peer
+from models import DownloadInfo, Peer, TorrentInfo
 from utils import grouper, humanize_size
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,9 @@ class TrackerHTTPClient:
             raise ValueError('TrackerHTTPClient expects announce_url with HTTP and HTTPS protocol')
 
         self._torrent_info = torrent_info
-        self._download_info = torrent_info.download_info
+        self._download_info = torrent_info.download_info  # type: DownloadInfo
+        self._statistics = self._download_info.session_statistics
+
         self._our_peer_id = our_peer_id
 
         self._session = aiohttp.ClientSession()
@@ -73,16 +75,16 @@ class TrackerHTTPClient:
 
     async def announce(self, server_port: int, event: Optional[str]):
         logger.debug('announce %s (uploaded = %s, downloaded = %s, left = %s)', event,
-                     humanize_size(self._download_info.uploaded_per_session),
-                     humanize_size(self._download_info.downloaded_per_session),
+                     humanize_size(self._statistics.uploaded_per_session),
+                     humanize_size(self._statistics.downloaded_per_session),
                      humanize_size(self._download_info.bytes_left))
 
         params = {
             'info_hash': self._download_info.info_hash,
             'peer_id': self._our_peer_id,
             'port': server_port,
-            'uploaded': self._download_info.total_uploaded,
-            'downloaded': self._download_info.total_downloaded,
+            'uploaded': self._statistics.total_uploaded,
+            'downloaded': self._statistics.total_downloaded,
             'left': self._download_info.bytes_left,
             'compact': 1,
         }

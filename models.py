@@ -201,6 +201,73 @@ class PieceInfo:
         self._blocks_expected = None
 
 
+class SessionStatistics:
+    def __init__(self, prev_session_stats: Optional['SessionStatistics']):
+        self.peer_count = 0
+        self._peer_last_download = {}
+        self._peer_last_upload = {}
+        self._downloaded_per_session = 0
+        self._uploaded_per_session = 0
+        self.download_speed = None
+        self.upload_speed = None
+
+        if prev_session_stats is not None:
+            self._total_downloaded = prev_session_stats.total_downloaded
+            self._total_uploaded = prev_session_stats.total_uploaded
+        else:
+            self._total_downloaded = 0
+            self._total_uploaded = 0
+
+    @property
+    def peer_last_download(self) -> Dict[Peer, float]:
+        return self._peer_last_download
+
+    @property
+    def peer_last_upload(self) -> Dict[Peer, float]:
+        return self._peer_last_upload
+
+    @property
+    def downloaded_per_session(self) -> int:
+        return self._downloaded_per_session
+
+    @property
+    def uploaded_per_session(self) -> int:
+        return self._uploaded_per_session
+
+    PEER_CONSIDERATION_TIME = 10
+
+    @staticmethod
+    def _get_actual_peer_count(time_dict: Dict[Peer, float]) -> int:
+        cur_time = time.time()
+        return sum(1 for t in time_dict.values() if cur_time - t <= SessionStatistics.PEER_CONSIDERATION_TIME)
+
+    @property
+    def downloading_peer_count(self) -> int:
+        return SessionStatistics._get_actual_peer_count(self._peer_last_download)
+
+    @property
+    def uploading_peer_count(self) -> int:
+        return SessionStatistics._get_actual_peer_count(self._peer_last_upload)
+
+    @property
+    def total_downloaded(self) -> int:
+        return self._total_downloaded
+
+    @property
+    def total_uploaded(self) -> int:
+        return self._total_uploaded
+
+    def add_downloaded(self, peer: Peer, size: int):
+        self._peer_last_download[peer] = time.time()
+        self._downloaded_per_session += size
+        self._total_downloaded += size
+
+    def add_uploaded(self, peer: Peer, size: int):
+        self._peer_last_upload[peer] = time.time()
+        self._uploaded_per_session += size
+        self._total_uploaded += size
+
+
 class DownloadInfo:
     MARKED_BLOCK_SIZE = 2 ** 10
 
@@ -228,17 +295,7 @@ class DownloadInfo:
 
         self._host_distrust_rates = {}
 
-        self.peer_count = None
-        self._peer_last_download = {}
-        self._peer_last_upload = {}
-        self._downloaded_per_session = None
-        self._uploaded_per_session = None
-        self.download_speed = None
-        self.upload_speed = None
-        self.reset_stats()
-
-        self._total_downloaded = 0
-        self._total_uploaded = 0
+        self._session_statistics = SessionStatistics(None)
 
     def reset_run_state(self):
         self._pieces = [copy.copy(info) for info in self._pieces]
@@ -248,11 +305,7 @@ class DownloadInfo:
         self._interesting_pieces = set()
 
     def reset_stats(self):
-        self.peer_count = 0
-        self._downloaded_per_session = 0
-        self._uploaded_per_session = 0
-        self.download_speed = None
-        self.upload_speed = None
+        self._session_statistics = SessionStatistics(self._session_statistics)
 
     @classmethod
     def from_dict(cls, dictionary: OrderedDict):
@@ -321,53 +374,8 @@ class DownloadInfo:
                 self._host_distrust_rates[peer.host] >= DownloadInfo.DISTRUST_RATE_TO_BAN)
 
     @property
-    def peer_last_download(self) -> Dict[Peer, float]:
-        return self._peer_last_download
-
-    @property
-    def peer_last_upload(self) -> Dict[Peer, float]:
-        return self._peer_last_upload
-
-    @property
-    def downloaded_per_session(self) -> int:
-        return self._downloaded_per_session
-
-    @property
-    def uploaded_per_session(self) -> int:
-        return self._uploaded_per_session
-
-    @property
-    def total_downloaded(self) -> int:
-        return self._total_downloaded
-
-    @property
-    def total_uploaded(self) -> int:
-        return self._total_uploaded
-
-    def add_downloaded(self, peer: Peer, size: int):
-        self._peer_last_download[peer] = time.time()
-        self._downloaded_per_session += size
-        self._total_downloaded += size
-
-    def add_uploaded(self, peer: Peer, size: int):
-        self._peer_last_upload[peer] = time.time()
-        self._uploaded_per_session += size
-        self._total_uploaded += size
-
-    PEER_CONSIDERATION_TIME = 10
-
-    @staticmethod
-    def _get_actual_peer_count(time_dict: Dict[Peer, float]):
-        cur_time = time.time()
-        return sum(1 for t in time_dict.values() if cur_time - t <= DownloadInfo.PEER_CONSIDERATION_TIME)
-
-    @property
-    def downloading_peer_count(self):
-        return DownloadInfo._get_actual_peer_count(self._peer_last_download)
-
-    @property
-    def uploading_peer_count(self):
-        return DownloadInfo._get_actual_peer_count(self._peer_last_upload)
+    def session_statistics(self) -> SessionStatistics:
+        return self._session_statistics
 
 
 class TorrentInfo:
