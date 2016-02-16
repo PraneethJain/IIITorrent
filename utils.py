@@ -15,10 +15,17 @@ def grouper(arr: T, group_size: int) -> List[T]:
 
 
 BYTES_PER_MIB = 2 ** 20
+BYTES_PER_GIB = 2 ** 30
 
 
 def humanize_size(size: int) -> str:
-    return '{:.1f} MiB'.format(size / BYTES_PER_MIB)
+    if size >= BYTES_PER_GIB:
+        unit = 'GiB'
+        factor = BYTES_PER_GIB
+    else:
+        unit = 'MiB'
+        factor = BYTES_PER_MIB
+    return '{:.1f} {}'.format(size / factor, unit)
 
 
 def humanize_speed(speed: int) -> str:

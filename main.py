@@ -91,15 +91,15 @@ async def remove_handler(args):
     await delegate_to_control(partial(ControlManager.remove, info_hash=torrent_info.download_info.info_hash))
 
 
+COLUMN_WIDTH = 30
 PROGRESS_BAR_WIDTH = 50
 
 
 def format_torrent_info(torrent_info: TorrentInfo):
     download_info = torrent_info.download_info  # type: DownloadInfo
     statistics = download_info.session_statistics
-
-    result = 'Name: {}\n'.format(download_info.suggested_name)
-    result += 'ID: {}\n'.format(download_info.info_hash.hex())
+    lines = ['Name: {}\n'.format(download_info.suggested_name),
+             'ID: {}\n'.format(download_info.info_hash.hex())]
 
     if torrent_info.paused:
         state = 'Paused'
@@ -107,15 +107,15 @@ def format_torrent_info(torrent_info: TorrentInfo):
         state = 'Uploading'
     else:
         state = 'Downloading'
-    result += 'State: {}\n'.format(state)
+    lines.append('State: {}\n'.format(state))
 
-    result += 'Download from: {}/{} peers\t'.format(statistics.downloading_peer_count, statistics.peer_count)
-    result += 'Upload to: {}/{} peers\n'.format(statistics.uploading_peer_count, statistics.peer_count)
+    lines.append('Download from: {}/{} peers\t'.format(statistics.downloading_peer_count, statistics.peer_count))
+    lines.append('Upload to: {}/{} peers\n'.format(statistics.uploading_peer_count, statistics.peer_count))
 
-    result += 'Download speed: {}\t'.format(
-        humanize_speed(statistics.download_speed) if statistics.download_speed is not None else 'unknown')
-    result += 'Upload speed: {}\n'.format(
-        humanize_speed(statistics.upload_speed) if statistics.upload_speed is not None else 'unknown')
+    lines.append('Download speed: {}\t'.format(
+        humanize_speed(statistics.download_speed) if statistics.download_speed is not None else 'unknown'))
+    lines.append('Upload speed: {}\n'.format(
+        humanize_speed(statistics.upload_speed) if statistics.upload_speed is not None else 'unknown'))
 
     last_piece_info = download_info.pieces[-1]
     downloaded_size = download_info.downloaded_piece_count * download_info.piece_length
@@ -125,16 +125,16 @@ def format_torrent_info(torrent_info: TorrentInfo):
     selected_size = selected_piece_count * download_info.piece_length
     if last_piece_info.selected:
         selected_size += last_piece_info.length - download_info.piece_length
-    result += 'Size: {}/{}\t'.format(humanize_size(downloaded_size), humanize_size(selected_size))
+    lines.append('Size: {}/{}\t'.format(humanize_size(downloaded_size), humanize_size(selected_size)))
 
     ratio = statistics.total_uploaded / statistics.total_downloaded if statistics.total_downloaded else 0
-    result += 'Ratio: {:.1f}\n'.format(ratio)
+    lines.append('Ratio: {:.1f}\n'.format(ratio))
 
     progress = downloaded_size / selected_size
     progress_bar = ('#' * round(progress * PROGRESS_BAR_WIDTH)).ljust(PROGRESS_BAR_WIDTH)
-    result += 'Progress: {:5.1f}% [{}]\n'.format(progress * 100, progress_bar)
+    lines.append('Progress: {:5.1f}% [{}]\n'.format(progress * 100, progress_bar))
 
-    return result
+    return ''.join(line[:-1].ljust(COLUMN_WIDTH) if line.endswith('\t') else line for line in lines)
 
 
 async def status_handler(args):
