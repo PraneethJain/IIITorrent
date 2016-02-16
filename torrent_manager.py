@@ -122,7 +122,7 @@ class TorrentManager:
             if peer in self._peer_clients:
                 self._peer_clients[peer].send_request(request, cancel=True)
 
-    async def _start_downloading_piece(self, piece_index: int):
+    def _start_downloading_piece(self, piece_index: int):
         cur_piece_length = self._download_info.get_real_piece_length(piece_index)
         blocks_expected = self._download_info.piece_blocks_expected[piece_index]
         request_deque = deque()
@@ -140,19 +140,6 @@ class TorrentManager:
         piece_owners = self._download_info.piece_owners[piece_index]
         for peer in piece_owners:
             self._peer_clients[peer].am_interested = True
-
-        choking_owners = [peer for peer in piece_owners if self._peer_clients[peer].peer_choking]
-        if len(choking_owners) == len(piece_owners) and choking_owners:
-            logger.debug('all piece owners are choking us yet, waiting for an answer for am_interested')
-            done, pending = await asyncio.wait([self._peer_clients[peer].drain() for peer in choking_owners],
-                                               timeout=TorrentManager.FLAG_TRANSMISSION_TIMEOUT)
-            for fut in done:
-                if fut.exception() is not None:
-                    logger.debug('draining failed with %s', repr(fut.exception()))
-            for fut in pending:
-                fut.cancel()
-
-            await asyncio.sleep(TorrentManager.FLAG_TRANSMISSION_TIMEOUT)
 
         logger.debug('piece %s started (owned by %s alive peers, concurrency: %s pieces, %s peers)',
                      piece_index, len(piece_owners), len(self._download_info.interesting_pieces),
@@ -272,7 +259,7 @@ class TorrentManager:
         for piece_index in self._non_started_pieces:
             available = False
             for peer in piece_owners[piece_index]:
-                if self._is_peer_free(peer):
+                if not self._peer_clients[peer].peer_choking and self._is_peer_free(peer):
                     available = True
                     break
             if available:
@@ -284,7 +271,7 @@ class TorrentManager:
         piece_count_to_select = min(len(available_pieces), TorrentManager.RAREST_PIECE_COUNT_TO_SELECT)
         return available_pieces[random.randint(0, piece_count_to_select - 1)]
 
-    async def _request_blocks(self, count: int) -> List[BlockRequestFuture]:
+    def _request_blocks(self, count: int) -> List[BlockRequestFuture]:
         result = []
         consumed_pieces = []
         try:
@@ -299,7 +286,7 @@ class TorrentManager:
                 new_piece_index = self._select_new_piece()
             if new_piece_index is not None:
                 self._non_started_pieces.remove(new_piece_index)
-                await self._start_downloading_piece(new_piece_index)
+                self._start_downloading_piece(new_piece_index)
 
                 result += list(self._request_piece_blocks(count - len(result), new_piece_index))
                 if not self._piece_block_queue[new_piece_index]:
@@ -347,8 +334,10 @@ class TorrentManager:
         while True:
             try:
                 async with self._request_consumption_lock:
+                    # TODO: Lock is unused
+                    # TODO: Take one piece if none is taken
                     free_place_count = TorrentManager.DOWNLOAD_REQUEST_QUEUE_SIZE - len(processed_requests)
-                    processed_requests += await self._request_blocks(free_place_count)
+                    processed_requests += self._request_blocks(free_place_count)
             except NotEnoughPeersError:
                 if not processed_requests:
                     await self._wait_more_peers()
