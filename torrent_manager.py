@@ -370,10 +370,10 @@ class TorrentManager:
                     event = 'completed'
                 else:
                     event = None
-                self._tracker_client.announce(event)
+                await self._tracker_client.announce(event)
                 self._connect_to_peers(self._tracker_client.peers)
         finally:
-            self._tracker_client.announce('stopped')
+            await self._tracker_client.announce('stopped')
 
     async def download(self):
         download_info = self._torrent_info.download_info
@@ -381,7 +381,7 @@ class TorrentManager:
         self._non_started_pieces = list(range(download_info.piece_count))
         random.shuffle(self._non_started_pieces)
 
-        self._tracker_client.announce('started')
+        await self._tracker_client.announce('started')
         self._connect_to_peers(self._tracker_client.peers)
 
         for _ in range(TorrentManager.DOWNLOAD_PEER_COUNT):

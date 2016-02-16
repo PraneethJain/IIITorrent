@@ -2,9 +2,8 @@ import logging
 import re
 from collections import OrderedDict
 from typing import List, Optional, cast, Sequence
-from urllib.parse import urlencode
-from urllib.request import urlopen
 
+import aiohttp
 import bencodepy
 
 from models import TorrentInfo, Peer
@@ -26,6 +25,8 @@ class TrackerHTTPClient:
 
         self._torrent_info = torrent_info
         self._our_peer_id = our_peer_id
+
+        self._session = aiohttp.ClientSession()
 
         self._tracker_id = None   # type: Optional[bytes]
         self.interval = None      # type: int
@@ -54,7 +55,7 @@ class TrackerHTTPClient:
 
     BYTES_PER_MIB = 2 ** 20
 
-    def announce(self, event: Optional[str]):
+    async def announce(self, event: Optional[str]):
         download_info = self._torrent_info.download_info
 
         logger.debug('announce %s (uploaded = %.1f MiB, downloaded = %.1f MiB, left = %.1f MiB)', event,
@@ -76,11 +77,11 @@ class TrackerHTTPClient:
         if self._tracker_id is not None:
             params['trackerid'] = self._tracker_id
 
-        url = self._torrent_info.announce_url + '?' + urlencode(params)
-        conn = urlopen(url)
-        response = cast(OrderedDict, bencodepy.decode(conn.read()))
-        conn.close()
-        # FIXME: handle exceptions, use aiohttp
+        async with self._session.get(self._torrent_info.announce_url, params=params) as conn:
+            response = await conn.read()
+        # FIXME: handle exceptions
+
+        response = cast(OrderedDict, bencodepy.decode(response))
 
         if b'failure reason' in response:
             raise TrackerError(response[b'failure reason'].decode())
