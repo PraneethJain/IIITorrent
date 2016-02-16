@@ -18,7 +18,7 @@ from tracker_http_client import TrackerHTTPClient
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-TIMER_WARNING_THRESHOLD_MS = 50
+TIMER_WARNING_THRESHOLD = 0.1
 
 
 class NotEnoughPeersError(RuntimeError):
@@ -104,8 +104,8 @@ class TorrentManager:
         piece_offset, cur_piece_length = self._get_piece_position(index)
         with contexttimer.Timer() as timer:
             self._file_structure.flush(piece_offset, cur_piece_length)
-        if timer.elapsed >= TIMER_WARNING_THRESHOLD_MS:
-            logger.warning('Too long flush (%s ms)', timer.elapsed)
+        if timer.elapsed >= TIMER_WARNING_THRESHOLD:
+            logger.warning('Too long flush (%.1f s)', timer.elapsed)
 
     FLAG_TRANSMISSION_TIMEOUT = 0.5
 
@@ -186,8 +186,8 @@ class TorrentManager:
         with contexttimer.Timer() as timer:
             data = self._file_structure.read(piece_offset, cur_piece_length)
             actual_digest = hashlib.sha1(data).digest()
-        if timer.elapsed >= TIMER_WARNING_THRESHOLD_MS:
-            logger.warning('Too long hash comparison (%s ms)', timer.elapsed)
+        if timer.elapsed >= TIMER_WARNING_THRESHOLD:
+            logger.warning('Too long hash comparison (%.1f s)', timer.elapsed)
         if actual_digest == download_info.piece_hashes[piece_index]:
             await self._finish_downloading_piece(piece_index)
             return

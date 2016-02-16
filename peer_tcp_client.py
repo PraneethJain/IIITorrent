@@ -13,7 +13,7 @@ from models import DownloadInfo, Peer, SHA1_DIGEST_LEN, BlockRequest
 
 CLIENT_LOGGER_LEVEL = logging.INFO
 
-TIMER_WARNING_THRESHOLD_MS = 50
+TIMER_WARNING_THRESHOLD = 0.1
 
 
 class MessageType(Enum):
@@ -285,11 +285,14 @@ class PeerTCPClient:
 
         with contexttimer.Timer() as timer:
             self._file_structure.write(piece_index * self._download_info.piece_length + block_begin, block_data)
+        if timer.elapsed >= TIMER_WARNING_THRESHOLD:
+            self._logger.warning('Too long write (%.1f s)', timer.elapsed)
 
+        with contexttimer.Timer() as timer:
             self._download_info.mark_downloaded_blocks(request)
-            self._download_info.piece_sources[piece_index].add(self._peer)
-        if timer.elapsed >= TIMER_WARNING_THRESHOLD_MS:
-            self._logger.warning('Too long _handle_block (%s ms)', timer.elapsed)
+        if timer.elapsed >= TIMER_WARNING_THRESHOLD:
+            self._logger.warning('Too long mark_downloaded_blocks (%.1f s)', timer.elapsed)
+        self._download_info.piece_sources[piece_index].add(self._peer)
 
     async def run(self):
         while True:
