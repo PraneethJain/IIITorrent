@@ -193,10 +193,13 @@ class TorrentManager:
             return
 
         for peer in self._download_info.piece_sources[piece_index]:
-            if peer not in self._peer_data:
-                continue
-            self._peer_data[peer].client.increase_distrust()
+            self._download_info.increase_distrust(peer)
+            if self._download_info.is_banned(peer):
+                logger.info('Host %s banned', peer.host)
+                self._client_executors[peer].cancel()
+
         self._download_info.reset_piece(piece_index)
+        self._start_downloading_piece(piece_index)
 
         logger.debug('piece %s not valid, redownloading', piece_index)
 
@@ -209,7 +212,6 @@ class TorrentManager:
         data = self._peer_data[peer]
 
         rate = data.client.downloaded  # To reach maximal download speed
-        rate -= 2 ** data.client.distrust_rate
         rate += random.randint(1, 100)  # Helps to shuffle clients in the beginning
 
         if data.hanged_time is not None and time.time() - data.hanged_time <= TorrentManager.HANG_PENALTY_DURATION:
@@ -223,7 +225,6 @@ class TorrentManager:
         rate = data.client.downloaded  # We owe them for downloading
         if self._download_info.is_complete():
             rate += data.client.uploaded  # To reach maximal upload speed
-        rate -= 2 ** data.client.distrust_rate
         rate += random.randint(1, 100)  # Helps to shuffle clients in the beginning
 
         return rate
@@ -412,7 +413,8 @@ class TorrentManager:
     MAX_PEERS_TO_ACCEPT = 55
 
     def _connect_to_peers(self, peers: Sequence[Peer], force: bool):
-        peers = list({peer for peer in peers if peer not in self._peer_data})
+        peers = list({peer for peer in peers
+                      if peer not in self._peer_data and not self._download_info.is_banned(peer)})
         if force:
             max_peers_count = TorrentManager.MAX_PEERS_TO_ACCEPT
         else:
@@ -431,6 +433,9 @@ class TorrentManager:
             return
         addr = writer.get_extra_info('peername')
         peer = Peer(addr[0], addr[1])
+        if self._download_info.is_banned(peer):
+            writer.close()
+            return
         logger.debug('accepted connection from %s', peer)
 
         client = PeerTCPClient(self._torrent_info.download_info, self._file_structure, self._our_peer_id, peer)

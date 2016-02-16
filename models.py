@@ -5,7 +5,7 @@ import socket
 import struct
 from collections import OrderedDict
 from math import ceil
-from typing import List, Set, cast, Optional
+from typing import List, Set, cast, Optional, Dict
 
 import bencodepy
 from bitarray import bitarray
@@ -137,6 +137,8 @@ class DownloadInfo:
         self._piece_blocks_expected = [set() for _ in range(self.piece_count)]
         self.total_uploaded = 0
         self.total_downloaded = 0
+
+        self._host_distrust_rates = {}
 
     @classmethod
     def from_dict(cls, dictionary: OrderedDict):
@@ -271,9 +273,18 @@ class DownloadInfo:
 
     def is_all_piece_blocks_downloaded(self, index: int):
         if self._piece_downloaded[index]:
-            raise ValueError('The whole piece is already downloaded')
+            raise ValueError('The piece is already marked as downloaded')
 
-        return cast(bitarray, self._piece_block_downloaded[index]).all()
+        return self._piece_block_downloaded is not None and self._piece_block_downloaded[index].all()
+
+    DISTRUST_RATE_TO_BAN = 5
+
+    def increase_distrust(self, peer: Peer):
+        self._host_distrust_rates[peer.host] = self._host_distrust_rates.get(peer.host, 0) + 1
+
+    def is_banned(self, peer: Peer) -> bool:
+        return (peer.host in self._host_distrust_rates and
+                self._host_distrust_rates[peer.host] >= DownloadInfo.DISTRUST_RATE_TO_BAN)
 
 
 class TorrentInfo:

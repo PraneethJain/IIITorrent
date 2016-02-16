@@ -49,7 +49,6 @@ class PeerTCPClient:
         self._piece_owned.setall(False)
         self._downloaded = 0
         self._uploaded = 0
-        self._distrust_rate = 0
 
         self._reader = None  # type: asyncio.StreamReader
         self._writer = None  # type: asyncio.StreamWriter
@@ -193,13 +192,6 @@ class PeerTCPClient:
     @property
     def uploaded(self):
         return self._uploaded
-
-    @property
-    def distrust_rate(self):
-        return self._distrust_rate
-
-    def increase_distrust(self):
-        self._distrust_rate += 1
 
     @staticmethod
     def _check_payload_len(message_id: MessageType, payload: memoryview, expected_len: int):
