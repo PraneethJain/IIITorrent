@@ -4,7 +4,7 @@ import logging
 import random
 import time
 from collections import deque
-from typing import Dict, List, MutableSet, Optional, Tuple, Sequence
+from typing import Dict, List, MutableSet, Optional, Tuple, Sequence, Iterable
 
 import contexttimer
 
@@ -57,6 +57,7 @@ class TorrentManager:
         self._executors_processed_requests = []  # type: List[List[BlockRequest]]
         self._announcement_executor = None       # type: Optional[asyncio.Task]
 
+        self._pieces_to_download = None   # type: Sequence[int]
         self._non_started_pieces = None   # type: List[int]
         self._request_deque = deque()
         self._peers_busy = set()          # type: MutableSet[Peer]
@@ -66,6 +67,7 @@ class TorrentManager:
 
         self._tasks_waiting_for_more_peers = 0
         self._more_peers_requested = asyncio.Event()
+        self._request_deque_relevant = asyncio.Event()
 
         self._file_structure = FileStructure(download_dir, torrent_info.download_info)
 
@@ -169,9 +171,9 @@ class TorrentManager:
             client.send_have(piece_index)
 
         logger.debug('piece %s finished', piece_index)
-        progress = download_info.downloaded_piece_count / download_info.piece_count
+        progress = download_info.downloaded_piece_count / len(self._pieces_to_download)
         logger.info('progress %.1lf%% (%s / %s pieces)', progress * 100,
-                    download_info.downloaded_piece_count, download_info.piece_count)
+                    download_info.downloaded_piece_count, len(self._pieces_to_download))
 
     async def _validate_piece(self, piece_index: int):
         download_info = self._torrent_info.download_info
@@ -279,21 +281,17 @@ class TorrentManager:
         await asyncio.sleep(TorrentManager.NOT_ENOUGH_PEERS_SLEEP_TIME)
         self._tasks_waiting_for_more_peers -= 1
 
-    NO_REQUESTS_SLEEP_TIME = 2
-
     async def _wait_more_requests(self):
         download_info = self._torrent_info.download_info
 
         if not self._endgame_mode:
-            non_finished_pieces = [i for i in range(download_info.piece_count)
+            non_finished_pieces = [i for i in self._pieces_to_download
                                    if not download_info.piece_downloaded[i]]
             logger.info('entering endgame mode (remaining pieces: %s)',
                         ', '.join(map(str, non_finished_pieces)))
             self._endgame_mode = True
 
-        # TODO: maybe use some signals instead of sleeping
-        logger.debug('no requests to process, sleeping')
-        await asyncio.sleep(TorrentManager.NO_REQUESTS_SLEEP_TIME)
+        await self._request_deque_relevant.wait()
 
     REQUEST_TIMEOUT = 6
     REQUEST_TIMEOUT_ENDGAME = 1
@@ -318,6 +316,7 @@ class TorrentManager:
                 cur_performer = None
                 if not processed_requests:
                     if not any(self._executors_processed_requests):
+                        self._request_deque_relevant.set()
                         return
                     await self._wait_more_requests()
                     continue
@@ -356,6 +355,8 @@ class TorrentManager:
                     self._request_deque.appendleft(future_to_request[fut])
                     del future_to_request[fut]
                 processed_requests.clear()
+                self._request_deque_relevant.set()
+                self._request_deque_relevant.clear()
 
             self._peers_busy.remove(cur_performer)
             prev_performer = cur_performer
@@ -402,10 +403,14 @@ class TorrentManager:
         finally:
             await self._tracker_client.announce('stopped')
 
-    async def download(self):
+    async def download(self, pieces: Sequence[int]=None):
         download_info = self._torrent_info.download_info
 
-        self._non_started_pieces = list(range(download_info.piece_count))
+        if pieces is None:
+            pieces = range(download_info.piece_count)
+        self._pieces_to_download = pieces
+
+        self._non_started_pieces = list(pieces)
         random.shuffle(self._non_started_pieces)
 
         await self._tracker_client.announce('started')
