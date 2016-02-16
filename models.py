@@ -21,17 +21,27 @@ class Peer:
     def __init__(self, host: str, port: int, peer_id: bytes=None):
         # FIXME: Need we typecheck for the case of malicious data?
 
-        self.host = host
-        self.port = port
+        self._host = host
+        self._port = port
         self.peer_id = peer_id
+
+        self._hash = hash((host, port))  # Important for performance
+
+    @property
+    def host(self) -> str:
+        return self._host
+
+    @property
+    def port(self) -> int:
+        return self._port
 
     def __eq__(self, other):
         if not isinstance(other, Peer):
             return False
-        return self.host == other.host and self.port == other.port
+        return self._host == other._host and self._port == other._port
 
     def __hash__(self):
-        return hash((self.host, self.port))
+        return self._hash
 
     @classmethod
     def from_dict(cls, dictionary: OrderedDict):
@@ -44,7 +54,7 @@ class Peer:
         return cls(host, port)
 
     def __repr__(self):
-        return '{}:{}'.format(self.host, self.port)
+        return '{}:{}'.format(self._host, self._port)
 
 
 class FileInfo:
