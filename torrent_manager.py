@@ -391,8 +391,7 @@ class TorrentManager:
 
                 default_interval = self._tracker_client.interval
                 try:
-                    await asyncio.wait_for(asyncio.shield(self._more_peers_requested.wait()),
-                                           default_interval - min_interval)
+                    await asyncio.wait_for(self._more_peers_requested.wait(), default_interval - min_interval)
                     more_peers = True
                     self._more_peers_requested.clear()
                 except asyncio.TimeoutError:
