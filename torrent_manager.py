@@ -253,17 +253,14 @@ class TorrentManager:
     RAREST_PIECE_COUNT_TO_SELECT = 10
 
     def _select_new_piece(self, *, force: bool) -> Optional[int]:
-        piece_owners = self._download_info.piece_owners
+        appropriate_peers = {peer for peer in self._peer_clients
+                             if (force or not self._peer_clients[peer].peer_choking) and self._is_peer_free(peer)}
+        if not appropriate_peers:
+            return None
 
-        available_pieces = []
-        for piece_index in self._non_started_pieces:
-            available = False
-            for peer in piece_owners[piece_index]:
-                if (force or not self._peer_clients[peer].peer_choking) and self._is_peer_free(peer):
-                    available = True
-                    break
-            if available:
-                available_pieces.append(piece_index)
+        piece_owners = self._download_info.piece_owners
+        available_pieces = [index for index in self._non_started_pieces
+                            if appropriate_peers & piece_owners[index]]
         if not available_pieces:
             return None
 
