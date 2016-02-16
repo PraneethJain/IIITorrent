@@ -403,14 +403,14 @@ class TorrentManager:
         finally:
             await self._tracker_client.announce('stopped')
 
-    async def download(self, pieces: Sequence[int]=None):
+    async def download(self, pieces_to_download: Sequence[int]=None):
         download_info = self._torrent_info.download_info
 
-        if pieces is None:
-            pieces = range(download_info.piece_count)
-        self._pieces_to_download = pieces
+        if pieces_to_download is None:
+            pieces_to_download = range(download_info.piece_count)
+        self._pieces_to_download = pieces_to_download
 
-        self._non_started_pieces = list(pieces)
+        self._non_started_pieces = list(pieces_to_download)
         random.shuffle(self._non_started_pieces)
 
         await self._tracker_client.announce('started')
@@ -425,27 +425,28 @@ class TorrentManager:
 
         await asyncio.wait(self._request_executors)
 
+        assert download_info.downloaded_piece_count == len(pieces_to_download)
+
         await self._tracker_client.announce('completed')
+        logger.info('file download complete')
         # TODO: disconnect from seeders (maybe), connect to new peers, upload
 
-        logger.info('file download complete')
-
     async def stop(self):
-        self._announcement_executor.cancel()
-        await asyncio.wait([self._announcement_executor])
-        self._announcement_executor = None
+        executors = []
+        if self._announcement_executor is not None:
+            executors.append(self._announcement_executor)
+        executors += self._request_executors + self._client_executors
 
-        for task in self._request_executors:
+        for task in executors:
             task.cancel()
-        if self._request_executors:
-            await asyncio.wait(self._request_executors)
+        if executors:
+            logger.debug('all tasks done or cancelled, awaiting finalizers')
+            await asyncio.wait(executors)
+            logger.debug('finalizers done')
+
+        self._announcement_executor = None
         self._request_executors.clear()
         self._executors_processed_requests.clear()
-
-        for task in self._client_executors:
-            task.cancel()
-        if self._client_executors:
-            await asyncio.wait(self._client_executors)
         self._client_executors.clear()
 
         self._tracker_client.close()

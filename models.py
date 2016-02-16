@@ -137,10 +137,6 @@ class DownloadInfo:
         return result
 
     @property
-    def complete(self):
-        return self.downloaded_piece_count == self.piece_count
-
-    @property
     def piece_owners(self) -> List[MutableSet[Peer]]:
         return self._piece_owners
 

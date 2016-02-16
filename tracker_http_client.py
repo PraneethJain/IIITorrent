@@ -79,6 +79,7 @@ class TrackerHTTPClient:
 
         async with self._session.get(self._torrent_info.announce_url, params=params) as conn:
             response = await conn.read()
+        # TODO: timeout (it's important because announce() is awaited on finalizing)
         # FIXME: handle exceptions
 
         response = bencodepy.decode(response)
