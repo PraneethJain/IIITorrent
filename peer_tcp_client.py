@@ -198,8 +198,8 @@ class PeerTCPClient:
     def piece_owned(self) -> Sequence[bool]:
         return self._piece_owned
 
-    def is_seed(self) -> bool:
-        return self._piece_owned & self._download_info.piece_selected == self._download_info.piece_selected
+    # def is_seed(self) -> bool:
+    #     return self._piece_owned & self._download_info.piece_selected == self._download_info.piece_selected
 
     @property
     def downloaded(self):
@@ -229,7 +229,7 @@ class PeerTCPClient:
 
     def _mark_as_owner(self, piece_index: int):
         self._piece_owned[piece_index] = True
-        self._download_info.piece_owners[piece_index].add(self._peer)
+        self._download_info.pieces[piece_index].owners.add(self._peer)
         if piece_index in self._download_info.interesting_pieces:
             self.am_interested = True
 
@@ -250,8 +250,8 @@ class PeerTCPClient:
                 if arr[i]:
                     raise ValueError('Spare bits in "bitfield" message must be zero')
 
-        if self._download_info.is_complete() and self.is_seed():
-            raise SeedError('A seed is disconnected because a download is complete')
+        # if self._download_info.complete and self.is_seed():
+        #     raise SeedError('A seed is disconnected because a download is complete')
 
     MAX_REQUEST_LENGTH = 2 ** 17
 
@@ -274,7 +274,7 @@ class PeerTCPClient:
                 raise ValueError('Requested {} bytes, but the current policy allows to accept requests '
                                  'of not more than {} bytes'.format(length, PeerTCPClient.MAX_REQUEST_LENGTH))
             if (self._am_choking or not self._peer_interested or
-                    not self._download_info.piece_downloaded[piece_index]):
+                    not self._download_info.pieces[piece_index].downloaded):
                 # If peer isn't interested but requesting, their peer_interested flag wasn't considered
                 # when selecting who to unchoke, so we may be not ready to upload to them.
                 # If requested piece is not downloaded yet, we shouldn't disconnect because our piece_downloaded flag
@@ -306,7 +306,8 @@ class PeerTCPClient:
         async with self._file_structure.lock:
             # Manual lock acquiring guarantees that piece validation will not be performed between
             # condition checking and piece writing
-            if self._download_info.piece_validating[piece_index] or self._download_info.piece_downloaded[piece_index]:
+            piece_info = self._download_info.pieces[piece_index]
+            if piece_info.validating or piece_info.downloaded:
                 return
 
             self._downloaded += block_length
@@ -315,8 +316,7 @@ class PeerTCPClient:
             await self._file_structure.write(piece_index * self._download_info.piece_length + block_begin, block_data,
                                              acquire_lock=False)
 
-            self._download_info.mark_downloaded_blocks(self._peer, request)
-            self._download_info.piece_sources[piece_index].add(self._peer)
+            piece_info.mark_downloaded_blocks(self._peer, request)
 
     async def run(self):
         while True:
@@ -343,7 +343,8 @@ class PeerTCPClient:
 
     def _send_bitfield(self):
         if self._download_info.downloaded_piece_count:
-            self._send_message(MessageType.bitfield, self._download_info.piece_downloaded.tobytes())
+            arr = bitarray([info.downloaded for info in self._download_info.pieces], endian='big')
+            self._send_message(MessageType.bitfield, arr.tobytes())
 
     def send_have(self, piece_index: int):
         self._send_message(MessageType.have, struct.pack('!I', piece_index))
@@ -351,7 +352,7 @@ class PeerTCPClient:
     def send_request(self, request: BlockRequest, cancel: bool=False):
         self._check_position_range(request)
         if not cancel:
-            assert self._peer in self._download_info.piece_owners[request.piece_index]
+            assert self._peer in self._download_info.pieces[request.piece_index].owners
 
         self._send_message(MessageType.request if not cancel else MessageType.cancel,
                            struct.pack('!3I', request.piece_index, request.block_begin, request.block_length))

@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import hashlib
 import random
 import socket
@@ -104,6 +105,102 @@ class BlockRequestFuture(asyncio.Future, BlockRequest):
 SHA1_DIGEST_LEN = 20
 
 
+class PieceInfo:
+    def __init__(self, piece_hash: bytes, length: int):
+        self._piece_hash = piece_hash
+        self._length = length
+
+        self.selected = True
+        # TODO: Exclude files from downloading
+        self.owners = set()  # type: Set[Peer]
+
+        self.validating = False
+
+        self._downloaded = None
+        self._sources = None
+        self._block_downloaded = None  # type: Optional[bitarray]
+        self._blocks_expected = None
+        self.reset_content()
+
+    def reset_content(self):
+        self._downloaded = False
+        self._sources = set()
+
+        self._block_downloaded = None
+        self._blocks_expected = set()
+
+    def reset_run_state(self):
+        self.owners = set()
+
+        self.validating = False
+
+        self._blocks_expected = set()
+
+    @property
+    def piece_hash(self) -> bytes:
+        return self._piece_hash
+
+    @property
+    def length(self) -> int:
+        return self._length
+
+    @property
+    def downloaded(self) -> bool:
+        return self._downloaded
+
+    @property
+    def sources(self) -> Set[Peer]:
+        return self._sources
+
+    @property
+    def blocks_expected(self) -> Optional[Set[BlockRequestFuture]]:
+        return self._blocks_expected
+
+    def mark_downloaded_blocks(self, source: Peer, request: BlockRequest):
+        if self._downloaded:
+            raise ValueError('The whole piece is already downloaded')
+
+        self._sources.add(source)
+
+        arr = self._block_downloaded
+        if arr is None:
+            arr = bitarray(ceil(self._length / DownloadInfo.MARKED_BLOCK_SIZE))
+            arr.setall(False)
+            self._block_downloaded = arr
+
+        mark_begin = ceil(request.block_begin / DownloadInfo.MARKED_BLOCK_SIZE)
+        if request.block_begin + request.block_length == self._length:
+            mark_end = len(arr)
+        else:
+            mark_end = (request.block_begin + request.block_length) // DownloadInfo.MARKED_BLOCK_SIZE
+        arr[mark_begin:mark_end] = True
+
+        blocks_expected = cast(Set[BlockRequestFuture], self._blocks_expected)
+        downloaded_blocks = []
+        for fut in blocks_expected:
+            query_begin = fut.block_begin // DownloadInfo.MARKED_BLOCK_SIZE
+            query_end = ceil((fut.block_begin + fut.block_length) / DownloadInfo.MARKED_BLOCK_SIZE)
+            if arr[query_begin:query_end].all():
+                downloaded_blocks.append(fut)
+                fut.set_result(source)
+        for fut in downloaded_blocks:
+            blocks_expected.remove(fut)
+
+    def are_all_blocks_downloaded(self) -> bool:
+        return self._downloaded or (self._block_downloaded is not None and self._block_downloaded.all())
+
+    def mark_as_downloaded(self):
+        if self._downloaded:
+            raise ValueError('The piece is already downloaded')
+
+        self._downloaded = True
+
+        # Delete data structures for this piece to save memory
+        self._sources = None
+        self._block_downloaded = None
+        self._blocks_expected = None
+
+
 class DownloadInfo:
     MARKED_BLOCK_SIZE = 2 ** 10
 
@@ -112,32 +209,24 @@ class DownloadInfo:
                  private: bool=False):
         self.info_hash = info_hash
         self.piece_length = piece_length
-        self.piece_hashes = piece_hashes
         self.suggested_name = suggested_name
         self.files = files
         self.private = private
+
+        assert piece_hashes
+        self._pieces = [PieceInfo(item, piece_length) for item in piece_hashes[:-1]]
+        last_piece_length = self.total_size - (len(piece_hashes) - 1) * self.piece_length
+        self._pieces.append(PieceInfo(piece_hashes[-1], last_piece_length))
 
         piece_count = len(piece_hashes)
         if ceil(self.total_size / piece_length) != piece_count:
             raise ValueError('Invalid count of piece hashes')
 
-        self._piece_sources = [set() for _ in range(piece_count)]
-        self._piece_downloaded = bitarray(piece_count, endian='big')
-        self._piece_downloaded.setall(False)
-        self._downloaded_piece_count = 0
-        self._piece_selected = bitarray(piece_count)
-        self._piece_selected.setall(True)
-        # TODO: Download only some files
-
-        self._piece_block_downloaded = [None] * piece_count  # type: List[Optional[bitarray]]
+        self._interesting_pieces = None
+        self.downloaded_piece_count = 0
+        self._complete = False
 
         self._host_distrust_rates = {}
-
-        self._piece_owners = None
-        self._piece_validating = None
-        self._interesting_pieces = None
-        self._piece_blocks_expected = None
-        self.reset_run_state()
 
         self.peer_count = None
         self._peer_last_download = {}
@@ -152,11 +241,11 @@ class DownloadInfo:
         self._total_uploaded = 0
 
     def reset_run_state(self):
-        self._piece_owners = [set() for _ in range(self.piece_count)]
-        self._piece_validating = bitarray(self.piece_count)
-        self._piece_validating.setall(False)
+        self._pieces = [copy.copy(info) for info in self._pieces]
+        for info in self._pieces:
+            info.reset_run_state()
+
         self._interesting_pieces = set()
-        self._piece_blocks_expected = [set() for _ in range(self.piece_count)]
 
     def reset_stats(self):
         self.peer_count = 0
@@ -183,8 +272,12 @@ class DownloadInfo:
                    private=dictionary.get('private', False))
 
     @property
+    def pieces(self) -> List[PieceInfo]:
+        return self._pieces
+
+    @property
     def piece_count(self) -> int:
-        return len(self.piece_hashes)
+        return len(self._pieces)
 
     def get_real_piece_length(self, index: int) -> int:
         if index == self.piece_count - 1:
@@ -200,100 +293,23 @@ class DownloadInfo:
     def bytes_left(self) -> int:
         result = (self.piece_count - self.downloaded_piece_count) * self.piece_length
         last_piece_index = self.piece_count - 1
-        if not self.piece_downloaded[last_piece_index]:
-            result += self.get_real_piece_length(last_piece_index) - self.piece_length
+        if not self._pieces[last_piece_index].downloaded:
+            result += self._pieces[last_piece_index].length - self.piece_length
         return result
-
-    @property
-    def piece_owners(self) -> List[Set[Peer]]:
-        return self._piece_owners
-
-    @property
-    def piece_sources(self) -> Optional[List[Set[Peer]]]:
-        return self._piece_sources
-
-    @property
-    def piece_validating(self) -> bitarray:
-        return self._piece_validating
-
-    @property
-    def piece_downloaded(self) -> bitarray:
-        return self._piece_downloaded
-
-    @property
-    def downloaded_piece_count(self) -> int:
-        return self._downloaded_piece_count
-
-    @property
-    def piece_selected(self) -> bitarray:
-        return self._piece_selected
-
-    def is_complete(self) -> bool:
-        return self._piece_downloaded & self._piece_selected == self._piece_selected
 
     @property
     def interesting_pieces(self) -> Set[int]:
         return self._interesting_pieces
 
-    def reset_piece(self, index: int):
-        self._piece_downloaded[index] = False
-
-        self._piece_sources[index] = set()
-        self._piece_block_downloaded[index] = None
-        self._piece_blocks_expected[index] = set()
-
     @property
-    def piece_blocks_expected(self) -> List[Optional[Set[BlockRequestFuture]]]:
-        return self._piece_blocks_expected
+    def complete(self) -> bool:
+        return self._complete
 
-    def mark_downloaded_blocks(self, source: Peer, request: BlockRequest):
-        if self._piece_downloaded[request.piece_index]:
-            return
-
-        real_piece_length = self.get_real_piece_length(request.piece_index)
-        arr = self._piece_block_downloaded[request.piece_index]
-        if arr is None:
-            arr = bitarray(ceil(real_piece_length / DownloadInfo.MARKED_BLOCK_SIZE))
-            arr.setall(False)
-            self._piece_block_downloaded[request.piece_index] = arr
-        else:
-            arr = cast(bitarray, arr)
-
-        mark_begin = ceil(request.block_begin / DownloadInfo.MARKED_BLOCK_SIZE)
-        if request.block_begin + request.block_length == real_piece_length:
-            mark_end = len(arr)
-        else:
-            mark_end = (request.block_begin + request.block_length) // DownloadInfo.MARKED_BLOCK_SIZE
-        arr[mark_begin:mark_end] = True
-
-        blocks_expected = self._piece_blocks_expected[request.piece_index]
-        downloaded_blocks = []
-        for fut in blocks_expected:
-            query_begin = fut.block_begin // DownloadInfo.MARKED_BLOCK_SIZE
-            query_end = ceil((fut.block_begin + fut.block_length) / DownloadInfo.MARKED_BLOCK_SIZE)
-            if arr[query_begin:query_end].all():
-                downloaded_blocks.append(fut)
-                fut.set_result(source)
-        for fut in downloaded_blocks:
-            blocks_expected.remove(fut)
-
-    def mark_piece_downloaded(self, index: int):
-        if self._piece_downloaded[index]:
-            raise ValueError('The piece is already downloaded')
-
-        self._piece_downloaded[index] = True
-        self._downloaded_piece_count += 1
-
-        # Delete data structures for this piece to save memory
-        self._piece_sources[index] = None
-        self._piece_block_downloaded[index] = None
-        self._piece_blocks_expected[index] = None
-
-    def is_all_piece_blocks_downloaded(self, index: int):
-        if self._piece_downloaded[index]:
-            raise ValueError('The piece is already marked as downloaded')
-
-        return self._piece_block_downloaded is not None and self._piece_block_downloaded[index].all()
+    @complete.setter
+    def complete(self, value: bool):
+        if value:
+            assert all(info.downloaded or not info.selected for info in self._pieces)
+        self._complete = value
 
     DISTRUST_RATE_TO_BAN = 5
 

@@ -2,7 +2,7 @@ import asyncio
 import functools
 import os
 from bisect import bisect_right
-from typing import Iterable, BinaryIO, Tuple, Callable, cast
+from typing import Iterable, BinaryIO, Tuple
 
 from models import DownloadInfo
 

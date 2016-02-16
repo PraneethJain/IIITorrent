@@ -11,7 +11,7 @@ from typing import Callable, TypeVar
 from control_client import ControlClient
 from control_manager import ControlManager
 from control_server import ControlServer
-from models import TorrentInfo
+from models import DownloadInfo, TorrentInfo
 from utils import humanize_size, humanize_speed
 
 DOWNLOAD_DIR = 'downloads'
@@ -95,13 +95,13 @@ PROGRESS_BAR_WIDTH = 50
 
 
 def format_torrent_info(torrent_info: TorrentInfo):
-    download_info = torrent_info.download_info
+    download_info = torrent_info.download_info  # type: DownloadInfo
     result = 'Name: {}\n'.format(download_info.suggested_name)
     result += 'ID: {}\n'.format(download_info.info_hash.hex())
 
     if torrent_info.paused:
         state = 'Paused'
-    elif download_info.is_complete():
+    elif download_info.complete:
         state = 'Uploading'
     else:
         state = 'Downloading'
@@ -115,13 +115,14 @@ def format_torrent_info(torrent_info: TorrentInfo):
     result += 'Upload speed: {}\n'.format(
         humanize_speed(download_info.upload_speed) if download_info.download_speed is not None else 'unknown')
 
-    last_piece_length = download_info.get_real_piece_length(download_info.piece_count - 1)
+    last_piece_info = download_info.pieces[-1]
     downloaded_size = download_info.downloaded_piece_count * download_info.piece_length
-    if download_info.piece_downloaded[-1]:
-        downloaded_size += last_piece_length - download_info.piece_length
-    selected_size = download_info.piece_selected.count() * download_info.piece_length
-    if download_info.piece_selected[-1]:
-        selected_size += last_piece_length - download_info.piece_length
+    if last_piece_info.downloaded:
+        downloaded_size += last_piece_info.length - download_info.piece_length
+    selected_piece_count = sum(1 for info in download_info.pieces if info.selected)
+    selected_size = selected_piece_count * download_info.piece_length
+    if last_piece_info.selected:
+        selected_size += last_piece_info.length - download_info.piece_length
     result += 'Size: {}/{}\t'.format(humanize_size(downloaded_size), humanize_size(selected_size))
 
     if download_info.total_downloaded:
@@ -174,8 +175,8 @@ def main():
     try:
         arguments = parser.parse_args()
         arguments.func(arguments)
-    except Exception as e:
-        print('Critical error: {}'.format(e), file=sys.stderr)
+    except ValueError as e:
+        print('Error: {}'.format(e), file=sys.stderr)
     finally:
         loop.close()
 
