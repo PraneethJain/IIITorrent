@@ -54,6 +54,11 @@ class PeerTCPClient:
 
     PEER_HANDSHAKE_MESSAGE = b'BitTorrent protocol'
 
+    CONNECT_TIMEOUT = 3
+    READ_TIMEOUT = 3
+    MAX_SILENCE_DURATION = 5 * 60
+    WRITE_TIMEOUT = 3
+
     async def _perform_handshake(self):
         info_hash = self._download_info.info_hash
 
@@ -64,8 +69,7 @@ class PeerTCPClient:
         self._writer.write(handshake_data)
         self._logger.debug('handshake sent')
 
-        response = await self._reader.readexactly(len(handshake_data))
-        # FIXME: timeouts?
+        response = await asyncio.wait_for(self._reader.readexactly(len(handshake_data)), PeerTCPClient.READ_TIMEOUT)
 
         if response[:message_len + 1] != handshake_data[:message_len + 1]:
             raise ValueError('Unknown protocol')
@@ -83,8 +87,6 @@ class PeerTCPClient:
         self._peer.peer_id = actual_peer_id
 
         self._logger.debug('handshake performed')
-
-    CONNECT_TIMEOUT = 3
 
     async def connect(self):
         self._logger.debug('trying to connect')
@@ -151,14 +153,13 @@ class PeerTCPClient:
         self._distrust_rate += 1
 
     async def _receive_message(self) -> Optional[Tuple[MessageType, memoryview]]:
-        data = await self._reader.readexactly(4)
+        data = await asyncio.wait_for(self._reader.readexactly(4), PeerTCPClient.MAX_SILENCE_DURATION)
         (length,) = struct.unpack('!I', data)
         if length == 0:  # keep-alive
             return None
 
         # FIXME: Don't receive too much stuff
-        # TODO: timeouts
-        data = await self._reader.readexactly(length)
+        data = await asyncio.wait_for(self._reader.readexactly(length), PeerTCPClient.READ_TIMEOUT)
         try:
             message_id = MessageType(data[0])
         except ValueError:
@@ -324,7 +325,7 @@ class PeerTCPClient:
                            struct.pack('!3I', request.piece_index, request.block_begin, request.block_length))
 
     async def drain(self):
-        await self._writer.drain()
+        await asyncio.wait_for(self._writer.drain(), PeerTCPClient.WRITE_TIMEOUT)
 
     def close(self):
         self._writer.close()

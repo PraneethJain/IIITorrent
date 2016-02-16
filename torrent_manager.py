@@ -93,7 +93,7 @@ class TorrentManager:
         if timer.elapsed >= TIMER_WARNING_THRESHOLD_MS:
             logger.warning('Too long flush (%s ms)', timer.elapsed)
 
-    FLAG_TRANSMISSION_TIMEOUT = 0.1
+    FLAG_TRANSMISSION_TIMEOUT = 0.5
 
     async def _start_downloading_piece(self, piece_index: int):
         download_info = self._torrent_info.download_info
@@ -378,6 +378,14 @@ class TorrentManager:
 
     DEFAULT_MIN_INTERVAL = 45
 
+    async def _try_to_announce(self, event: Optional[str]) -> bool:
+        try:
+            await self._tracker_client.announce(event)
+            return True
+        except Exception as e:
+            logger.warning('exception on announce: %s', repr(e))
+            return False
+
     async def _execute_regular_announcements(self):
         try:
             while True:
@@ -395,10 +403,11 @@ class TorrentManager:
                 except asyncio.TimeoutError:
                     more_peers = False
 
-                await self._tracker_client.announce(None)
+                await self._try_to_announce(None)
+
                 self._connect_to_peers(self._tracker_client.peers, more_peers)
         finally:
-            await self._tracker_client.announce('stopped')
+            await self._try_to_announce('stopped')
 
     async def _download(self):
         download_info = self._torrent_info.download_info
@@ -418,7 +427,7 @@ class TorrentManager:
         await asyncio.wait(self._request_executors)
 
         assert self.download_complete
-        await self._tracker_client.announce('completed')
+        await self._try_to_announce('completed')
         logger.info('file download complete')
         # TODO: disconnect from seeders (maybe), connect to new peers, upload
 
@@ -484,6 +493,8 @@ class TorrentManager:
 
             prev_unchoked_peers = cur_unchoked_peers
 
+    ANNOUNCE_FAILED_SLEEP_TIME = 3
+
     async def run(self, pieces_to_download: Sequence[int]=None):
         download_info = self._torrent_info.download_info
 
@@ -491,8 +502,9 @@ class TorrentManager:
             pieces_to_download = range(download_info.piece_count)
         self._pieces_to_download = pieces_to_download
 
-        await self._tracker_client.announce('started')
-        # TODO: Try again if an announce request failed (we need to retrieve a start bunch of peers)
+        while not await self._try_to_announce('started'):
+            await asyncio.sleep(TorrentManager.ANNOUNCE_FAILED_SLEEP_TIME)
+
         self._connect_to_peers(self._tracker_client.peers, False)
 
         self._announcement_executor = asyncio.ensure_future(self._execute_regular_announcements())

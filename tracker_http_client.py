@@ -42,6 +42,22 @@ class TrackerHTTPClient:
             raise ValueError('Invalid length of a compact representation of peers')
         return list(map(Peer.from_compact_form, grouper(data, 6)))
 
+    def _handle_primary_response_fields(self, response: OrderedDict):
+        if b'failure reason' in response:
+            raise TrackerError(response[b'failure reason'].decode())
+
+        self.interval = response[b'interval']
+        if b'min interval' in response:
+            self.min_interval = response[b'min interval']
+            if self.min_interval > self.interval:
+                raise ValueError('Tracker returned min_interval that is greater than a default interval')
+
+        peers = response[b'peers']
+        if isinstance(peers, bytes):
+            self._peers = TrackerHTTPClient._parse_compact_peers_list(peers)
+        else:
+            self._peers = list(map(Peer.from_dict, peers))
+
     def _handle_optional_response_fields(self, response: OrderedDict):
         if b'warning message' in response:
             logger.warning('Tracker returned warning message: %s', response[b'warning message'].decode())
@@ -52,6 +68,8 @@ class TrackerHTTPClient:
             self.seed_count = response[b'complete']
         if b'incomplete' in response:
             self.leech_count = response[b'incomplete']
+
+    REQUEST_TIMEOUT = 3
 
     BYTES_PER_MIB = 2 ** 20
 
@@ -77,32 +95,19 @@ class TrackerHTTPClient:
         if self._tracker_id is not None:
             params['trackerid'] = self._tracker_id
 
-        async with self._session.get(self._torrent_info.announce_url, params=params) as conn:
-            response = await conn.read()
-        # TODO: timeout (it's important because announce() is awaited on finalizing)
-        # FIXME: handle exceptions
+        with aiohttp.Timeout(TrackerHTTPClient.REQUEST_TIMEOUT):
+            async with self._session.get(self._torrent_info.announce_url, params=params) as conn:
+                response = await conn.read()
 
         response = bencodepy.decode(response)
         if not response:
+            if event == 'started':
+                raise ValueError('Tracker returned an empty answer on start announcement')
             return
         response = cast(OrderedDict, response)
 
-        if b'failure reason' in response:
-            raise TrackerError(response[b'failure reason'].decode())
-
-        self.interval = response[b'interval']
-        if b'min interval' in response:
-            self.min_interval = response[b'min interval']
-            if self.min_interval > self.interval:
-                raise ValueError('Tracker returned min_interval that is greater than a default interval')
-
+        self._handle_primary_response_fields(response)
         self._handle_optional_response_fields(response)
-
-        peers = response[b'peers']
-        if isinstance(peers, bytes):
-            self._peers = TrackerHTTPClient._parse_compact_peers_list(peers)
-        else:
-            self._peers = list(map(Peer.from_dict, peers))
 
         logger.debug('%s peers, interval = %s, min_interval = %s', len(self._peers), self.interval, self.min_interval)
 
