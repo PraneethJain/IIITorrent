@@ -204,7 +204,7 @@ class TorrentManager:
 
     _INF = float('inf')
 
-    HANG_PENALTY_DURATION = 15
+    HANG_PENALTY_DURATION = 10
     HANG_PENALTY_COEFF = 100
 
     def get_peer_download_rate(self, peer: Peer) -> int:
@@ -321,7 +321,7 @@ class TorrentManager:
 
     DOWNLOAD_PEERS_ACTIVE_TO_REQUEST_MORE_PEERS = 2
 
-    NO_PEERS_SLEEP_TIME = 5
+    NO_PEERS_SLEEP_TIME = 3
     STARTING_DURATION = 5
     NO_PEERS_SLEEP_TIME_ON_STARTING = 1
 
