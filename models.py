@@ -5,7 +5,7 @@ import socket
 import struct
 from collections import OrderedDict
 from math import ceil
-from typing import List, Set, cast, Optional, Dict
+from typing import List, Set, cast, Optional
 
 import bencodepy
 from bitarray import bitarray
@@ -120,11 +120,7 @@ class DownloadInfo:
         if ceil(self.total_size / piece_length) != piece_count:
             raise ValueError('Invalid count of piece hashes')
 
-        self._piece_owners = [set() for _ in range(piece_count)]
-
         self._piece_sources = [set() for _ in range(piece_count)]
-        self._piece_validating = bitarray(piece_count)
-        self._piece_validating.setall(False)
         self._piece_downloaded = bitarray(piece_count, endian='big')
         self._piece_downloaded.setall(False)
         self._downloaded_piece_count = 0
@@ -135,12 +131,24 @@ class DownloadInfo:
         blocks_per_piece = ceil(piece_length / DownloadInfo.MARKED_BLOCK_SIZE)
         self._piece_block_downloaded = [None] * piece_count * blocks_per_piece  # type: List[Optional[bitarray]]
 
+        self._host_distrust_rates = {}
+
+        self._piece_owners = None
+        self._piece_validating = None
+        self._interesting_pieces = None
+        self._piece_blocks_expected = None
+        self.total_downloaded = None
+        self.total_uploaded = None
+        self.reset_run_state()
+
+    def reset_run_state(self):
+        self._piece_owners = [set() for _ in range(self.piece_count)]
+        self._piece_validating = bitarray(self.piece_count)
+        self._piece_validating.setall(False)
         self._interesting_pieces = set()
         self._piece_blocks_expected = [set() for _ in range(self.piece_count)]
         self.total_uploaded = 0
         self.total_downloaded = 0
-
-        self._host_distrust_rates = {}
 
     @classmethod
     def from_dict(cls, dictionary: OrderedDict):
@@ -158,17 +166,6 @@ class DownloadInfo:
         return cls(info_hash,
                    dictionary[b'piece length'], piece_hashes, dictionary[b'name'].decode(), files,
                    private=dictionary.get('private', False))
-
-    def reset_run_state(self):
-        for owners in self._piece_owners:
-            owners.clear()
-
-        self._interesting_pieces.clear()
-        for requests in self._piece_blocks_expected:
-            if requests is not None:
-                requests.clear()
-        self.total_uploaded = 0
-        self.total_downloaded = 0
 
     @property
     def piece_count(self) -> int:
@@ -294,14 +291,16 @@ class DownloadInfo:
 
 
 class TorrentInfo:
-    def __init__(self, download_info: DownloadInfo, announce_url: str):
+    def __init__(self, download_info: DownloadInfo, announce_url: str, *, download_dir: str):
         # TODO: maybe implement optional fields
 
         self.download_info = download_info
         self.announce_url = announce_url
 
+        self.download_dir = download_dir
+
     @classmethod
-    def from_file(cls, filename):
+    def from_file(cls, filename: str, **kwargs):
         dictionary = cast(OrderedDict, bencodepy.decode_from_file(filename))
         download_info = DownloadInfo.from_dict(dictionary[b'info'])
-        return cls(download_info, dictionary[b'announce'].decode())
+        return cls(download_info, dictionary[b'announce'].decode(), **kwargs)

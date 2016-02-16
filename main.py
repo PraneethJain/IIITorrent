@@ -3,7 +3,6 @@
 import asyncio
 import logging
 import os
-import pickle
 import signal
 import sys
 
@@ -29,13 +28,11 @@ def main():
 
     if os.path.isfile(STATE_FILENAME):
         with open(STATE_FILENAME, 'rb') as f:
-            torrent_info = pickle.load(f)
-        logger.info('state recovered')
+            control.load(f)
     else:
-        torrent_filename = sys.argv[1]
-        torrent_info = TorrentInfo.from_file(torrent_filename)
-        logger.info('new torrent loaded')
-    control.add(torrent_info, DOWNLOAD_DIR)
+        for arg in sys.argv[1:]:
+            torrent_info = TorrentInfo.from_file(arg, download_dir=DOWNLOAD_DIR)
+            control.add(torrent_info)
 
     stopping = False
 
@@ -54,10 +51,8 @@ def main():
     try:
         loop.run_forever()
     finally:
-        torrent_info.download_info.reset_run_state()
         with open(STATE_FILENAME, 'wb') as f:
-            pickle.dump(torrent_info, f)
-        logger.info('state saved')
+            control.dump(f)
 
         loop.close()
 

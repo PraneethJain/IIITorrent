@@ -10,8 +10,6 @@ from bitarray import bitarray
 from file_structure import FileStructure
 from models import SHA1_DIGEST_LEN, DownloadInfo, Peer, BlockRequest
 
-CLIENT_LOGGER_LEVEL = logging.INFO
-
 
 class MessageType(Enum):
     choke = 0
@@ -31,12 +29,14 @@ class SeedError(Exception):
 
 
 class PeerTCPClient:
+    LOGGER_LEVEL = logging.INFO
+
     def __init__(self, our_peer_id: bytes, peer: Peer):
         self._our_peer_id = our_peer_id
         self._peer = peer
 
         self._logger = logging.getLogger('[{}]'.format(peer))
-        self._logger.setLevel(CLIENT_LOGGER_LEVEL)
+        self._logger.setLevel(PeerTCPClient.LOGGER_LEVEL)
 
         self._download_info = None   # type: DownloadInfo
         self._file_structure = None  # type: FileStructure
