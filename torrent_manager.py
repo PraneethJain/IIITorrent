@@ -421,6 +421,8 @@ class TorrentManager:
         try:
             await self._tracker_client.announce(event)
             return True
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.warning('exception on announce: %s', repr(e))
             return False
@@ -544,6 +546,8 @@ class TorrentManager:
         for port in TorrentManager.SERVER_PORT_RANGE:
             try:
                 self._server = await asyncio.start_server(self._accept_client, port=port)
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.debug('exception on server starting on port %s: %s', port, repr(e))
             else:
