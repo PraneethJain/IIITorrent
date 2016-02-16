@@ -174,7 +174,7 @@ def main():
     try:
         arguments = parser.parse_args()
         arguments.func(arguments)
-    except ValueError as e:
+    except (ValueError, RuntimeError) as e:
         print('Error: {}'.format(e), file=sys.stderr)
     finally:
         loop.close()

@@ -23,7 +23,7 @@ class NoRequestsError(RuntimeError):
     pass
 
 
-DOWNLOAD_REQUEST_QUEUE_SIZE = 10
+DOWNLOAD_REQUEST_QUEUE_SIZE = 12
 
 
 class PeerData:
@@ -231,11 +231,8 @@ class TorrentManager:
         data = self._peer_data[peer]
 
         rate = data.client.downloaded  # To reach maximal download speed
-        rate += random.randint(1, 100)  # Helps to shuffle clients in the beginning
-
         if data.hanged_time is not None and time.time() - data.hanged_time <= TorrentManager.HANG_PENALTY_DURATION:
             rate //= TorrentManager.HANG_PENALTY_COEFF
-
         return rate
 
     def get_peer_upload_rate(self, peer: Peer) -> int:
@@ -244,8 +241,6 @@ class TorrentManager:
         rate = data.client.downloaded  # We owe them for downloading
         if self._download_info.complete:
             rate += data.client.uploaded  # To reach maximal upload speed
-        rate += random.randint(1, 100)  # Helps to shuffle clients in the beginning
-
         return rate
 
     DOWNLOAD_PEER_COUNT = 15
