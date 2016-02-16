@@ -38,6 +38,8 @@ class TorrentManager:
         self._peer_clients = {}                  # type: Dict[Peer, PeerTCPClient]
         self._peer_connected_time = {}           # type: Dict[Peer, float]
         self._peer_hanged_time = {}              # type: Dict[Peer, float]
+
+        self._server = None
         self._client_executors = []              # type: List[asyncio.Task]
         self._announcement_executor = None       # type: Optional[asyncio.Task]
         self._uploading_executor = None          # type: Optional[asyncio.Task]
@@ -58,9 +60,10 @@ class TorrentManager:
 
         self._file_structure = FileStructure(download_dir, torrent_info.download_info)
 
-    async def _execute_peer_client(self, peer: Peer, client: PeerTCPClient):
+    async def _execute_peer_client(self, peer: Peer, client: PeerTCPClient,
+                                   streams: Tuple[asyncio.StreamReader, asyncio.StreamWriter]=None):
         try:
-            await client.connect()
+            await client.connect(streams)
 
             self._peer_clients[peer] = client
             self._peer_connected_time[peer] = time.time()
@@ -376,6 +379,19 @@ class TorrentManager:
                                    self._our_peer_id, peer)
             self._client_executors.append(asyncio.ensure_future(self._execute_peer_client(peer, client)))
 
+    async def _accept_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        if len(self._peer_clients) >= TorrentManager.MAX_PEERS_TO_ACCEPT:
+            # FIXME: reject connection earlier?
+            writer.close()
+            return
+        addr = writer.get_extra_info('peername')
+        peer = Peer(addr[0], addr[1])
+        logger.debug('accepted connection from %s', peer)
+
+        client = PeerTCPClient(self._torrent_info.download_info, self._file_structure, self._our_peer_id, peer)
+        self._client_executors.append(asyncio.ensure_future(self._execute_peer_client(peer, client,
+                                                                                      (reader, writer))))
+
     DEFAULT_MIN_INTERVAL = 45
 
     async def _try_to_announce(self, event: Optional[str]) -> bool:
@@ -452,7 +468,7 @@ class TorrentManager:
         index = random.randint(0, max_index)
         if index < len(remaining_peers):
             return remaining_peers[index]
-        return connected_recently[(index - len(remaining_peers)) // len(connected_recently)]
+        return connected_recently[(index - len(remaining_peers)) % len(connected_recently)]
 
     async def _execute_uploading(self):
         prev_unchoked_peers = set()
@@ -493,6 +509,8 @@ class TorrentManager:
 
             prev_unchoked_peers = cur_unchoked_peers
 
+    SERVER_PORT_RANGE = range(6881, 6889 + 1)
+
     ANNOUNCE_FAILED_SLEEP_TIME = 3
 
     async def run(self, pieces_to_download: Sequence[int]=None):
@@ -501,6 +519,18 @@ class TorrentManager:
         if pieces_to_download is None:
             pieces_to_download = range(download_info.piece_count)
         self._pieces_to_download = pieces_to_download
+
+        logger.debug('starting server')
+        for port in TorrentManager.SERVER_PORT_RANGE:
+            try:
+                self._server = await asyncio.start_server(self._accept_client, port=port)
+            except Exception as e:
+                logger.debug('exception on server starting on port %s: %s', port, repr(e))
+            else:
+                logger.debug('server started on port %s', port)
+                break
+        else:
+            logger.warning('failed to start server, giving up')
 
         while not await self._try_to_announce('started'):
             await asyncio.sleep(TorrentManager.ANNOUNCE_FAILED_SLEEP_TIME)
@@ -519,12 +549,14 @@ class TorrentManager:
         return download_info.downloaded_piece_count == len(self._pieces_to_download)
 
     async def stop(self):
-        executors = self._request_executors
-        if self._announcement_executor is not None:
-            executors.append(self._announcement_executor)
-        if self._uploading_executor:
-            executors.append(self._uploading_executor)
-        executors += self._client_executors
+        if self._server is not None:
+            self._server.close()
+            await self._server.wait_closed()
+            self._server = None
+
+        executors = self._request_executors + [self._uploading_executor, self._announcement_executor] + \
+                    self._client_executors
+        executors = [task for task in executors if task is not None]
 
         for task in executors:
             task.cancel()
@@ -535,6 +567,7 @@ class TorrentManager:
 
         self._request_executors.clear()
         self._executors_processed_requests.clear()
+        self._uploading_executor = None
         self._announcement_executor = None
         self._client_executors.clear()
 

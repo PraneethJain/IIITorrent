@@ -69,7 +69,7 @@ class TrackerHTTPClient:
         if b'incomplete' in response:
             self.leech_count = response[b'incomplete']
 
-    REQUEST_TIMEOUT = 3
+    REQUEST_TIMEOUT = 5
 
     BYTES_PER_MIB = 2 ** 20
 

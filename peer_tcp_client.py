@@ -54,10 +54,10 @@ class PeerTCPClient:
 
     PEER_HANDSHAKE_MESSAGE = b'BitTorrent protocol'
 
-    CONNECT_TIMEOUT = 3
-    READ_TIMEOUT = 3
+    CONNECT_TIMEOUT = 5
+    READ_TIMEOUT = 5
     MAX_SILENCE_DURATION = 5 * 60
-    WRITE_TIMEOUT = 3
+    WRITE_TIMEOUT = 5
 
     async def _perform_handshake(self):
         info_hash = self._download_info.info_hash
@@ -88,12 +88,14 @@ class PeerTCPClient:
 
         self._logger.debug('handshake performed')
 
-    async def connect(self):
-        self._logger.debug('trying to connect')
-
-        self._reader, self._writer = await asyncio.wait_for(
-            asyncio.open_connection(self._peer.host, self._peer.port), PeerTCPClient.CONNECT_TIMEOUT)
-        self._logger.debug('connected')
+    async def connect(self, streams: Tuple[asyncio.StreamReader, asyncio.StreamWriter]=None):
+        if streams is None:
+            self._logger.debug('trying to connect')
+            self._reader, self._writer = await asyncio.wait_for(
+                asyncio.open_connection(self._peer.host, self._peer.port), PeerTCPClient.CONNECT_TIMEOUT)
+            self._logger.debug('connected')
+        else:
+            self._reader, self._writer = streams
 
         try:
             await self._perform_handshake()
@@ -152,13 +154,16 @@ class PeerTCPClient:
     def increase_distrust(self):
         self._distrust_rate += 1
 
+    MAX_MESSAGE_LENGTH = 2 ** 18
+
     async def _receive_message(self) -> Optional[Tuple[MessageType, memoryview]]:
         data = await asyncio.wait_for(self._reader.readexactly(4), PeerTCPClient.MAX_SILENCE_DURATION)
         (length,) = struct.unpack('!I', data)
         if length == 0:  # keep-alive
             return None
+        if length > PeerTCPClient.MAX_MESSAGE_LENGTH:
+            raise ValueError('Message length is too big')
 
-        # FIXME: Don't receive too much stuff
         data = await asyncio.wait_for(self._reader.readexactly(length), PeerTCPClient.READ_TIMEOUT)
         try:
             message_id = MessageType(data[0])
