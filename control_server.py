@@ -67,7 +67,7 @@ class ControlServer:
             writer.close()
 
     HOST = '127.0.0.1'
-    PORT_RANGE = range(6991, 6999 + 1)
+    PORT_RANGE = range(6995, 6999 + 1)
 
     async def start(self):
         for port in ControlServer.PORT_RANGE:

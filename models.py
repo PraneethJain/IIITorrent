@@ -7,7 +7,7 @@ import struct
 import time
 from collections import OrderedDict
 from math import ceil
-from typing import List, Set, cast, Optional, Dict
+from typing import List, Set, cast, Optional, Dict, Union, Any, Iterator
 
 import bencodepy
 from bitarray import bitarray
@@ -61,9 +61,24 @@ class Peer:
 
 class FileInfo:
     def __init__(self, length: int, path: List[str], *, md5sum: str=None):
-        self.length = length
-        self.path = path
-        self.md5sum = md5sum
+        self._length = length
+        self._path = path
+        self._md5sum = md5sum
+
+        self.offset = None
+        self.selected = True
+
+    @property
+    def length(self) -> int:
+        return self._length
+
+    @property
+    def path(self) -> List[str]:
+        return self._path
+
+    @property
+    def md5sum(self) -> str:
+        return self._md5sum
 
     @classmethod
     def from_dict(cls, dictionary: OrderedDict):
@@ -111,7 +126,6 @@ class PieceInfo:
         self._length = length
 
         self.selected = True
-        # TODO: Exclude files from downloading
         self.owners = set()  # type: Set[Peer]
 
         self.validating = False
@@ -268,6 +282,9 @@ class SessionStatistics:
         self._total_uploaded += size
 
 
+FileTreeNode = Union[FileInfo, Dict[str, Any]]
+
+
 class DownloadInfo:
     MARKED_BLOCK_SIZE = 2 ** 10
 
@@ -277,7 +294,11 @@ class DownloadInfo:
         self.info_hash = info_hash
         self.piece_length = piece_length
         self.suggested_name = suggested_name
+
         self.files = files
+        self._file_tree = {}
+        self._create_file_tree()
+
         self.private = private
 
         assert piece_hashes
@@ -296,6 +317,79 @@ class DownloadInfo:
         self._host_distrust_rates = {}
 
         self._session_statistics = SessionStatistics(None)
+
+    def _create_file_tree(self):
+        offset = 0
+        for item in self.files:
+            item.offset = offset
+            offset += item.length
+
+            if not item.path:
+                self._file_tree = item
+            else:
+                directory = self._file_tree
+                for elem in item.path[:-1]:
+                    directory = directory.setdefault(elem, {})
+                directory[item.path[-1]] = item
+
+    def _get_file_tree_node(self, path: List[str]) -> FileTreeNode:
+        result = self._file_tree
+        try:
+            for elem in path:
+                result = result[elem]
+        except KeyError:
+            raise ValueError("Path \"{}\" doesn't exist in this torrent".format('/'.join(path)))
+        return result
+
+    @staticmethod
+    def _traverse_nodes(node: FileTreeNode) -> Iterator[FileInfo]:
+        if isinstance(node, FileInfo):
+            yield node
+            return
+        for child in node.values():
+            yield from DownloadInfo._traverse_nodes(child)
+
+    def select_files(self, paths: List[List[str]], mode: str):
+        if mode not in ('whitelist', 'blacklist'):
+            raise ValueError('Invalid mode "{}"'.format(mode))
+        include_paths = (mode == 'whitelist')
+
+        if len(self.files) == 1 and not self.files[0].path:
+            raise ValueError("Can't select files in a single-file torrent")
+
+        for info in self.pieces:
+            info.selected = not include_paths
+        for info in self.files:
+            info.selected = not include_paths
+
+        segments = []
+        for path in paths:
+            for node in DownloadInfo._traverse_nodes(self._get_file_tree_node(path)):
+                node.selected = include_paths
+                segments.append((node.offset, node.length))
+        if (include_paths and not segments) or (not include_paths and len(segments) == len(self.files)):
+            raise ValueError("Can't exclude all files from the torrent")
+
+        segments.sort()
+        united_segments = []
+        for cur_segment in segments:
+            if united_segments:
+                last_segment = united_segments[-1]
+                if last_segment[0] + last_segment[1] == cur_segment[0]:
+                    united_segments[-1] = (last_segment[0], last_segment[1] + cur_segment[1])
+                    continue
+            united_segments.append(cur_segment)
+
+        for offset, length in united_segments:
+            if include_paths:
+                piece_begin = offset // self.piece_length
+                piece_end = ceil((offset + length) / self.piece_length)
+            else:
+                piece_begin = ceil(offset / self.piece_length)
+                piece_end = (offset + length) // self.piece_length
+
+            for index in range(piece_begin, piece_end):
+                self.pieces[index].selected = include_paths
 
     def reset_run_state(self):
         self._pieces = [copy.copy(info) for info in self._pieces]

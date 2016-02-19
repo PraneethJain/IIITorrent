@@ -46,3 +46,10 @@ class ControlClient:
     def close(self):
         if self._writer is not None:
             self._writer.close()
+
+    async def __aenter__(self) -> 'ControlClient':
+        await self.connect()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        self.close()

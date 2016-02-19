@@ -1,8 +1,5 @@
-import logging
-from typing import List, TypeVar, Sequence, Optional
-
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+from math import floor, log
+from typing import List, TypeVar, Sequence
 
 
 T = TypeVar('T', Sequence, memoryview)
@@ -14,19 +11,17 @@ def grouper(arr: T, group_size: int) -> List[T]:
     return [arr[i:i + group_size] for i in range(0, len(arr), group_size)]
 
 
-BYTES_PER_MIB = 2 ** 20
-BYTES_PER_GIB = 2 ** 30
+UNIT_BASE = 2 ** 10
+UNIT_PREFIXES = 'KMG'
 
 
 def humanize_size(size: int) -> str:
-    if size >= BYTES_PER_GIB:
-        unit = 'GiB'
-        factor = BYTES_PER_GIB
-    else:
-        unit = 'MiB'
-        factor = BYTES_PER_MIB
-    return '{:.1f} {}'.format(size / factor, unit)
+    if size < UNIT_BASE:
+        return '{} bytes'.format(size)
+    unit = floor(log(size, UNIT_BASE))
+    unit_name = UNIT_PREFIXES[min(unit, len(UNIT_PREFIXES)) - 1] + 'iB'
+    return '{:.1f} {}'.format(size / UNIT_BASE ** unit, unit_name)
 
 
 def humanize_speed(speed: int) -> str:
-    return '{:.1f} MiB/s'.format(speed / BYTES_PER_MIB)
+    return humanize_size(speed) + '/s'
