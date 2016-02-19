@@ -24,7 +24,7 @@ class ControlClient:
 
                 message = await self._reader.readexactly(len(ControlServer.HANDSHAKE_MESSAGE))
                 if message != ControlServer.HANDSHAKE_MESSAGE:
-                    raise ValueError('Unknown protocol')
+                    raise RuntimeError('Unknown control server protocol')
             except Exception as e:
                 self.close()
                 self._reader = None

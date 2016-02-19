@@ -22,8 +22,20 @@ logging.basicConfig(format='%(levelname)s %(asctime)s %(name)-23s %(message)s', 
 STATE_FILENAME = 'state.bin'
 
 
+async def check_daemon_absence():
+    try:
+        async with ControlClient():
+            pass
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError('A daemon on this port is already running')
+
+
 def run_daemon(args):
     with closing(asyncio.get_event_loop()) as loop:
+        loop.run_until_complete(check_daemon_absence())
+
         control = ControlManager()
         loop.run_until_complete(control.start())
 
