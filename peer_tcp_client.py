@@ -142,7 +142,7 @@ class PeerTCPClient:
             return None
         payload = memoryview(data)[1:]
 
-        self._logger.debug('incoming message %s length=%s', message_id.name, length)
+        # self._logger.debug('incoming message %s length=%s', message_id.name, length)
 
         return message_id, payload
 
@@ -154,7 +154,7 @@ class PeerTCPClient:
             return
 
         length = sum(len(portion) for portion in payload) + 1
-        self._logger.debug('outcoming message %s length=%s', message_id.name, length)
+        # self._logger.debug('outcoming message %s length=%s', message_id.name, length)
 
         self._writer.write(struct.pack('!IB', length, message_id.value))
         for portion in payload:

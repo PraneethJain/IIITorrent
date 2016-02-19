@@ -6,6 +6,7 @@ import os
 import re
 import signal
 import sys
+from contextlib import closing
 from functools import partial
 
 import torrent_formatters
@@ -15,47 +16,43 @@ from control_server import ControlServer
 from models import TorrentInfo
 
 
+logging.basicConfig(format='%(levelname)s %(asctime)s %(name)-23s %(message)s', datefmt='%H:%M:%S')
+
+
 STATE_FILENAME = 'state.bin'
 
 
-logging.basicConfig(format='%(levelname)s %(asctime)s %(name)-23s %(message)s', datefmt='%H:%M:%S')
-
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-
-
 def run_daemon(args):
-    loop = asyncio.get_event_loop()
+    with closing(asyncio.get_event_loop()) as loop:
+        control = ControlManager()
+        loop.run_until_complete(control.start())
 
-    control = ControlManager()
-    loop.run_until_complete(control.start())
+        if os.path.isfile(STATE_FILENAME):
+            with open(STATE_FILENAME, 'rb') as f:
+                control.load(f)
 
-    if os.path.isfile(STATE_FILENAME):
-        with open(STATE_FILENAME, 'rb') as f:
-            control.load(f)
+        control_server = ControlServer(control)
+        loop.run_until_complete(control_server.start())
 
-    control_server = ControlServer(control)
-    loop.run_until_complete(control_server.start())
+        stopping = False
 
-    stopping = False
+        def stop_handler():
+            nonlocal stopping
+            if stopping:
+                return
+            stopping = True
 
-    def stop_handler():
-        nonlocal stopping
-        if stopping:
-            return
-        stopping = True
+            stop_task = asyncio.ensure_future(asyncio.wait([control_server.stop(), control.stop()]))
+            stop_task.add_done_callback(lambda fut: loop.stop())
 
-        stop_task = asyncio.ensure_future(asyncio.wait([control_server.stop(), control.stop()]))
-        stop_task.add_done_callback(lambda fut: loop.stop())
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, stop_handler)
 
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, stop_handler)
-
-    try:
-        loop.run_forever()
-    finally:
-        with open(STATE_FILENAME, 'wb') as f:
-            control.dump(f)
+        try:
+            loop.run_forever()
+        finally:
+            with open(STATE_FILENAME, 'wb') as f:
+                control.dump(f)
 
 
 def show_handler(args):
@@ -125,12 +122,18 @@ async def status_handler(args):
 DEFAULT_DOWNLOAD_DIR = 'downloads'
 
 
+def run_in_event_loop(coro_function, args):
+    with closing(asyncio.get_event_loop()) as loop:
+        loop.run_until_complete(coro_function(args))
+
+
 def main():
     parser = argparse.ArgumentParser(description='A prototype of BitTorrent client (console management tool)')
+    parser.add_argument('--debug', action='store_true',
+                        help='Show debug messages')
+    parser.set_defaults(func=lambda args: print('Use option "--help" to show usage.', file=sys.stderr))
     subparsers = parser.add_subparsers(description='Specify an action before "--help" to show parameters for it.',
                                        metavar='ACTION', dest='action')
-
-    loop = asyncio.get_event_loop()
 
     subparser = subparsers.add_parser('start', help='Start a daemon')
     subparser.set_defaults(func=run_daemon)
@@ -149,25 +152,25 @@ def main():
                        help='Download only files and directories specified in "--include" options')
     group.add_argument('--exclude', action='append',
                        help='Download all files and directories except those that specified in "--exclude" options')
-    subparser.set_defaults(func=lambda args: loop.run_until_complete(add_handler(args)))
+    subparser.set_defaults(func=partial(run_in_event_loop, add_handler))
 
     control_commands = ['pause', 'resume', 'remove']
     for command_name in control_commands:
         subparser = subparsers.add_parser(command_name, help='{} torrent'.format(command_name.capitalize()))
         subparser.add_argument('filenames', nargs='*' if command_name != 'remove' else '+',
                                help='Torrent file names')
-        subparser.set_defaults(func=lambda args: loop.run_until_complete(control_action_handler(args)))
+        subparser.set_defaults(func=partial(run_in_event_loop, control_action_handler))
 
     subparser = subparsers.add_parser('status', help='Show status')
-    subparser.set_defaults(func=lambda args: loop.run_until_complete(status_handler(args)))
+    subparser.set_defaults(func=partial(run_in_event_loop, status_handler))
 
+    arguments = parser.parse_args()
+    if not arguments.debug:
+        logging.disable(logging.INFO)
     try:
-        arguments = parser.parse_args()
         arguments.func(arguments)
     except (ValueError, RuntimeError) as e:
         print('Error: {}'.format(e), file=sys.stderr)
-    finally:
-        loop.close()
 
 
 if __name__ == '__main__':
