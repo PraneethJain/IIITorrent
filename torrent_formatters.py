@@ -1,7 +1,8 @@
+from math import floor
 from typing import Iterable, List
 
 from models import DownloadInfo, TorrentInfo
-from utils import humanize_size, humanize_speed
+from utils import humanize_size, humanize_speed, floor_to
 
 
 COLUMN_WIDTH = 30
@@ -77,7 +78,7 @@ def format_status(torrent_info: TorrentInfo) -> List[str]:
     lines.append('Ratio: {:.1f}\n'.format(ratio))
 
     progress = downloaded_size / selected_size
-    progress_bar = ('#' * round(progress * PROGRESS_BAR_WIDTH)).ljust(PROGRESS_BAR_WIDTH)
-    lines.append('Progress: {:5.1f}% [{}]\n'.format(progress * 100, progress_bar))
+    progress_bar = ('#' * floor(progress * PROGRESS_BAR_WIDTH)).ljust(PROGRESS_BAR_WIDTH)
+    lines.append('Progress: {:5.1f}% [{}]\n'.format(floor_to(progress * 100, 1), progress_bar))
 
     return lines

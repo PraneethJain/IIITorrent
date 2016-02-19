@@ -12,7 +12,7 @@ from file_structure import FileStructure
 from models import BlockRequestFuture, DownloadInfo, Peer, TorrentInfo
 from peer_tcp_client import PeerTCPClient
 from tracker_http_client import TrackerHTTPClient
-from utils import humanize_size
+from utils import humanize_size, floor_to
 
 
 class NotEnoughPeersError(RuntimeError):
@@ -195,7 +195,7 @@ class TorrentManager:
         self._logger.debug('piece %s finished', piece_index)
         selected_piece_count = sum(1 for info in self._download_info.pieces if info.selected)
         progress = self._download_info.downloaded_piece_count / selected_piece_count
-        self._logger.info('progress %.1lf%% (%s / %s pieces)', progress * 100,
+        self._logger.info('progress %.1lf%% (%s / %s pieces)', floor_to(progress * 100, 1),
                           self._download_info.downloaded_piece_count, selected_piece_count)
 
     async def _validate_piece(self, piece_index: int):

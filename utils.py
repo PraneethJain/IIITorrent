@@ -25,3 +25,8 @@ def humanize_size(size: int) -> str:
 
 def humanize_speed(speed: int) -> str:
     return humanize_size(speed) + '/s'
+
+
+def floor_to(x: float, ndigits: int) -> float:
+    scale = 10 ** ndigits
+    return floor(x * scale) / scale
