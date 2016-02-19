@@ -10,13 +10,20 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
+class DaemonExit(Exception):
+    pass
+
+
 class ControlServer:
-    def __init__(self, control: ControlManager):
+    def __init__(self, control: ControlManager, daemon_stop_handler: Callable[['ControlServer'], None]):
         self._control = control
+        self._daemon_stop_handler = daemon_stop_handler
 
         self._server = None
 
-        self._flag = False
+    @property
+    def control(self) -> ControlManager:
+        return self._control
 
     HANDSHAKE_MESSAGE = b'bit-torrent:ControlServer\n'
 
@@ -57,6 +64,11 @@ class ControlServer:
                     result = e
 
                 ControlServer.send_object(result, writer)
+
+                if isinstance(result, DaemonExit):
+                    logger.info('stop command received')
+                    self._daemon_stop_handler(self)
+                    return
         except asyncio.IncompleteReadError:
             pass
         except asyncio.CancelledError:

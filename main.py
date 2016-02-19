@@ -6,13 +6,13 @@ import os
 import re
 import signal
 import sys
-from contextlib import closing
+from contextlib import closing, suppress
 from functools import partial
 
 import torrent_formatters
 from control_client import ControlClient
 from control_manager import ControlManager
-from control_server import ControlServer
+from control_server import ControlServer, DaemonExit
 from models import TorrentInfo
 
 
@@ -31,22 +31,22 @@ def run_daemon(args):
             with open(STATE_FILENAME, 'rb') as f:
                 control.load(f)
 
-        control_server = ControlServer(control)
-        loop.run_until_complete(control_server.start())
-
         stopping = False
 
-        def stop_handler():
+        def stop_daemon(server: ControlServer):
             nonlocal stopping
             if stopping:
                 return
             stopping = True
 
-            stop_task = asyncio.ensure_future(asyncio.wait([control_server.stop(), control.stop()]))
+            stop_task = asyncio.ensure_future(asyncio.wait([server.stop(), server.control.stop()]))
             stop_task.add_done_callback(lambda fut: loop.stop())
 
+        control_server = ControlServer(control, stop_daemon)
+        loop.run_until_complete(control_server.start())
+
         for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, stop_handler)
+            loop.add_signal_handler(sig, partial(stop_daemon, control_server))
 
         try:
             loop.run_forever()
@@ -119,6 +119,16 @@ async def status_handler(args):
     print(status_text)
 
 
+def stop_server_handler(_: ControlManager):
+    raise DaemonExit()
+
+
+async def stop_handler(_):
+    async with ControlClient() as client:
+        with suppress(DaemonExit):
+            await client.execute(stop_server_handler)
+
+
 DEFAULT_DOWNLOAD_DIR = 'downloads'
 
 
@@ -137,6 +147,9 @@ def main():
 
     subparser = subparsers.add_parser('start', help='Start a daemon')
     subparser.set_defaults(func=run_daemon)
+
+    subparser = subparsers.add_parser('stop', help='Stop the daemon')
+    subparser.set_defaults(func=partial(run_in_event_loop, stop_handler))
 
     subparser = subparsers.add_parser('show', help="Show torrent content (no daemon required)")
     subparser.add_argument('filename', help='Torrent file name')
