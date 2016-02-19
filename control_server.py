@@ -44,6 +44,7 @@ class ControlServer:
             writer.write(ControlServer.HANDSHAKE_MESSAGE)
 
             while True:
+                # FIXME: maybe do not allow to execute arbitrary object
                 action = cast(Callable[[ControlManager], Any], await ControlServer.receive_object(reader))
 
                 try:

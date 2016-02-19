@@ -14,7 +14,6 @@ from control_server import ControlServer
 from models import DownloadInfo, TorrentInfo
 from utils import humanize_size, humanize_speed
 
-DOWNLOAD_DIR = 'downloads'
 
 STATE_FILENAME = 'state.bin'
 
@@ -72,23 +71,13 @@ async def delegate_to_control(action: Callable[[ControlManager], T]) -> T:
 
 
 async def add_handler(args):
-    torrent_info = TorrentInfo.from_file(args.filename, download_dir=DOWNLOAD_DIR)
+    torrent_info = TorrentInfo.from_file(args.filename, download_dir=args.download_dir)
     await delegate_to_control(partial(ControlManager.add, torrent_info=torrent_info))
 
 
-async def pause_handler(args):
-    torrent_info = TorrentInfo.from_file(args.filename, download_dir=DOWNLOAD_DIR)
-    await delegate_to_control(partial(ControlManager.pause, info_hash=torrent_info.download_info.info_hash))
-
-
-async def resume_handler(args):
-    torrent_info = TorrentInfo.from_file(args.filename, download_dir=DOWNLOAD_DIR)
-    await delegate_to_control(partial(ControlManager.resume, info_hash=torrent_info.download_info.info_hash))
-
-
-async def remove_handler(args):
-    torrent_info = TorrentInfo.from_file(args.filename, download_dir=DOWNLOAD_DIR)
-    await delegate_to_control(partial(ControlManager.remove, info_hash=torrent_info.download_info.info_hash))
+async def control_action_handler(action, args):
+    torrent_info = TorrentInfo.from_file(args.filename, download_dir=None)
+    await delegate_to_control(partial(action, info_hash=torrent_info.download_info.info_hash))
 
 
 COLUMN_WIDTH = 30
@@ -143,6 +132,9 @@ async def status_handler(args):
     print('\n'.join(map(format_torrent_info, torrent_list)), end='')
 
 
+DEFAULT_DOWNLOAD_DIR = 'downloads'
+
+
 def main():
     parser = argparse.ArgumentParser(description='A prototype of BitTorrent client')
     subparsers = parser.add_subparsers(help='action')
@@ -154,19 +146,16 @@ def main():
 
     subparser = subparsers.add_parser('add', help='add new torrent')
     subparser.add_argument('filename', help='Torrent filename')
+    subparser.add_argument('-d', '--download-dir', default=DEFAULT_DOWNLOAD_DIR,
+                           help='download directory')
     subparser.set_defaults(func=lambda args: loop.run_until_complete(add_handler(args)))
 
-    subparser = subparsers.add_parser('pause', help='pause torrent')
-    subparser.add_argument('filename', help='Torrent filename')
-    subparser.set_defaults(func=lambda args: loop.run_until_complete(pause_handler(args)))
-
-    subparser = subparsers.add_parser('resume', help='resume torrent')
-    subparser.add_argument('filename', help='Torrent filename')
-    subparser.set_defaults(func=lambda args: loop.run_until_complete(resume_handler(args)))
-
-    subparser = subparsers.add_parser('remove', help='remove torrent')
-    subparser.add_argument('filename', help='Torrent filename')
-    subparser.set_defaults(func=lambda args: loop.run_until_complete(remove_handler(args)))
+    control_commands = ['pause', 'resume', 'remove']
+    for command_name in control_commands:
+        subparser = subparsers.add_parser(command_name, help='{} torrent'.format(command_name))
+        subparser.add_argument('filename', help='Torrent filename')
+        subparser.set_defaults(func=lambda args, action=getattr(ControlManager, command_name):
+                               loop.run_until_complete(control_action_handler(action, args)))
 
     subparser = subparsers.add_parser('status', help='show status')
     subparser.set_defaults(func=lambda args: loop.run_until_complete(status_handler(args)))
