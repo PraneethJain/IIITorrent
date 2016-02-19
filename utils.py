@@ -27,6 +27,23 @@ def humanize_speed(speed: int) -> str:
     return humanize_size(speed) + '/s'
 
 
+SECONDS_PER_MINUTE = 60
+MINUTES_PER_HOUR = 60
+
+
+def humanize_time(total_seconds: int) -> str:
+    if total_seconds < SECONDS_PER_MINUTE:
+        return 'less than a minute'
+    total_minutes = round(total_seconds / SECONDS_PER_MINUTE)
+
+    hours = total_minutes // MINUTES_PER_HOUR
+    minutes = total_minutes % MINUTES_PER_HOUR
+    result = '{} min'.format(minutes)
+    if hours:
+        result = '{} h '.format(hours) + result
+    return result
+
+
 def floor_to(x: float, ndigits: int) -> float:
     scale = 10 ** ndigits
     return floor(x * scale) / scale

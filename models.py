@@ -222,8 +222,8 @@ class SessionStatistics:
         self._peer_last_upload = {}
         self._downloaded_per_session = 0
         self._uploaded_per_session = 0
-        self.download_speed = None
-        self.upload_speed = None
+        self.download_speed = None  # type: Optional[float]
+        self.upload_speed = None    # type: Optional[float]
 
         if prev_session_stats is not None:
             self._total_downloaded = prev_session_stats.total_downloaded

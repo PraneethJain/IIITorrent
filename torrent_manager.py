@@ -582,7 +582,7 @@ class TorrentManager:
 
             prev_unchoked_peers = cur_unchoked_peers
 
-    SPEED_MEASUREMENT_PERIOD = 10
+    SPEED_MEASUREMENT_PERIOD = 60
     SPEED_UPDATE_TIMEOUT = 2
 
     assert SPEED_MEASUREMENT_PERIOD % SPEED_UPDATE_TIMEOUT == 0
