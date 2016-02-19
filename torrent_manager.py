@@ -245,19 +245,21 @@ class TorrentManager:
 
     DOWNLOAD_PEER_COUNT = 15
 
-    def _request_piece_blocks(self, count: int, piece_index: int) -> Iterator[BlockRequestFuture]:
-        if not count:
+    def _request_piece_blocks(self, max_pending_count: int, piece_index: int) -> Iterator[BlockRequestFuture]:
+        if not max_pending_count:
             return
         piece_info = self._download_info.pieces[piece_index]
 
         request_deque = self._piece_block_queue[piece_index]
         performer = None
         performer_data = None
-        yielded_count = 0
+        pending_count = 0
         while request_deque:
             request = request_deque[0]
             if request.done():
                 request_deque.popleft()
+
+                yield request
                 continue
 
             if performer is None or not performer_data.is_free():
@@ -274,8 +276,8 @@ class TorrentManager:
             performer_data.client.send_request(request)
             yield request
 
-            yielded_count += 1
-            if yielded_count == count:
+            pending_count += 1
+            if pending_count == max_pending_count:
                 return
 
     RAREST_PIECE_COUNT_TO_SELECT = 10
@@ -301,15 +303,18 @@ class TorrentManager:
     _desired_request_stock = DOWNLOAD_PEER_COUNT * DOWNLOAD_REQUEST_QUEUE_SIZE
     DESIRED_PIECE_STOCK = ceil(_desired_request_stock / _requests_per_piece)
 
-    def _request_blocks(self, count: int) -> List[BlockRequestFuture]:
+    def _request_blocks(self, max_pending_count: int) -> List[BlockRequestFuture]:
         result = []
+        pending_count = 0
         consumed_pieces = []
         try:
             for piece_index, request_deque in self._piece_block_queue.items():
-                result += list(self._request_piece_blocks(count - len(result), piece_index))
+                piece_requests = list(self._request_piece_blocks(max_pending_count - pending_count, piece_index))
+                result += piece_requests
+                pending_count += sum(1 for request in piece_requests if not request.done())
                 if not request_deque:
                     consumed_pieces.append(piece_index)
-                if len(result) == count:
+                if pending_count == max_pending_count:
                     return result
 
             piece_stock = len(self._piece_block_queue) - len(consumed_pieces)
@@ -319,7 +324,7 @@ class TorrentManager:
                 self._non_started_pieces.remove(new_piece_index)
                 self._start_downloading_piece(new_piece_index)
 
-                result += list(self._request_piece_blocks(count - len(result), new_piece_index))
+                result += list(self._request_piece_blocks(max_pending_count - pending_count, new_piece_index))
                 if not self._piece_block_queue[new_piece_index]:
                     consumed_pieces.append(new_piece_index)
         finally:
@@ -371,8 +376,9 @@ class TorrentManager:
     async def _execute_block_requests(self, processed_requests: List[BlockRequestFuture]):
         while True:
             try:
-                free_place_count = DOWNLOAD_REQUEST_QUEUE_SIZE - len(processed_requests)
-                processed_requests += self._request_blocks(free_place_count)
+                max_pending_count = DOWNLOAD_REQUEST_QUEUE_SIZE - len(processed_requests)
+                if max_pending_count > 0:
+                    processed_requests += self._request_blocks(max_pending_count)
             except NotEnoughPeersError:
                 if not processed_requests:
                     await self._wait_more_peers()
