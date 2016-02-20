@@ -6,7 +6,7 @@ from utils import humanize_size, humanize_speed, floor_to, humanize_time
 
 
 COLUMN_WIDTH = 30
-INDENT_WIDTH = 4
+INDENT = ' ' * 4
 PROGRESS_BAR_WIDTH = 50
 
 
@@ -24,7 +24,9 @@ def format_title(torrent_info: TorrentInfo) -> List[str]:
 def format_content(torrent_info: TorrentInfo) -> List[str]:
     download_info = torrent_info.download_info  # type: DownloadInfo
 
-    lines = ['Announce URL: {}\n'.format(torrent_info.announce_url)]
+    lines = ['Announce URLs:\n']
+    for i, tier in enumerate(torrent_info.announce_list):
+        lines.append(INDENT + 'Tier {}: {}\n'.format(i + 1, ', '.join(tier)))
 
     single_file_mode = (len(download_info.files) == 1 and not download_info.files[0].path)
     total_size_repr = humanize_size(download_info.total_size)
@@ -33,8 +35,7 @@ def format_content(torrent_info: TorrentInfo) -> List[str]:
     else:
         lines.append('Content: {} files (total {})\n'.format(len(download_info.files), total_size_repr))
         for file_info in download_info.files:
-            lines.append(' ' * INDENT_WIDTH + '{} ({})\n'.format(
-                '/'.join(file_info.path), humanize_size(file_info.length)))
+            lines.append(INDENT + '{} ({})\n'.format('/'.join(file_info.path), humanize_size(file_info.length)))
     return lines
 
 

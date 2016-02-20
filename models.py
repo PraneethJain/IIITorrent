@@ -7,7 +7,7 @@ import struct
 import time
 from collections import OrderedDict
 from math import ceil
-from typing import List, Set, cast, Optional, Dict, Union, Any, Iterator
+from typing import List, Set, cast, Optional, Dict, Union, Any, Iterator, Tuple
 
 import bencodepy
 from bitarray import bitarray
@@ -482,11 +482,11 @@ class DownloadInfo:
 
 
 class TorrentInfo:
-    def __init__(self, download_info: DownloadInfo, announce_url: str, *, download_dir: str):
+    def __init__(self, download_info: DownloadInfo, announce_list: List[List[str]], *, download_dir: str):
         # TODO: maybe implement optional fields
 
         self.download_info = download_info
-        self.announce_url = announce_url
+        self._announce_list = announce_list
 
         self.download_dir = download_dir
 
@@ -496,4 +496,15 @@ class TorrentInfo:
     def from_file(cls, filename: str, **kwargs):
         dictionary = cast(OrderedDict, bencodepy.decode_from_file(filename))
         download_info = DownloadInfo.from_dict(dictionary[b'info'])
-        return cls(download_info, dictionary[b'announce'].decode(), **kwargs)
+
+        if b'announce-list' in dictionary:
+            announce_list = [[url.decode() for url in tier]
+                             for tier in dictionary[b'announce-list']]
+        else:
+            announce_list = [[dictionary[b'announce'].decode()]]
+
+        return cls(download_info, announce_list, **kwargs)
+
+    @property
+    def announce_list(self) -> List[List[str]]:
+        return self._announce_list

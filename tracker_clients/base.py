@@ -1,8 +1,7 @@
 from enum import Enum
 from typing import List, Optional
-from urllib.parse import urlparse
 
-from models import DownloadInfo, Peer, TorrentInfo
+from models import DownloadInfo, Peer
 from utils import grouper
 
 
@@ -21,9 +20,8 @@ class TrackerError(Exception):
 
 
 class BaseTrackerClient:
-    def __init__(self, torrent_info: TorrentInfo, our_peer_id: bytes):
-        self._torrent_info = torrent_info
-        self._download_info = torrent_info.download_info  # type: DownloadInfo
+    def __init__(self, download_info: DownloadInfo, our_peer_id: bytes):
+        self._download_info = download_info
         self._statistics = self._download_info.session_statistics
 
         self._our_peer_id = our_peer_id
@@ -39,9 +37,6 @@ class BaseTrackerClient:
         return self._peers
 
     async def announce(self, server_port: int, event: EventType):
-        raise NotImplementedError
-
-    def close(self):
         raise NotImplementedError
 
 

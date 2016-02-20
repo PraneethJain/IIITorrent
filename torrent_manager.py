@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Tuple, Sequence, Iterable, cast, Iterat
 from file_structure import FileStructure
 from models import BlockRequestFuture, DownloadInfo, Peer, TorrentInfo
 from peer_tcp_client import PeerTCPClient
-from tracker_clients import create_tracker_client, EventType
+from tracker_clients import BaseTrackerClient, create_tracker_client, EventType
 from utils import humanize_size, floor_to
 
 
@@ -68,8 +68,8 @@ class TorrentManager:
         self._logger = logging.getLogger('"{}"'.format(short_name))
         self._logger.setLevel(TorrentManager.LOGGER_LEVEL)
 
-        self._tracker_client = create_tracker_client(self._torrent_info, self._our_peer_id)
-        self._peer_data = {}  # type: Dict[Peer, PeerData]
+        self._last_tracker_client = None  # type: BaseTrackerClient
+        self._peer_data = {}              # type: Dict[Peer, PeerData]
 
         self._client_executors = {}   # type: Dict[Peer, asyncio.Task]
         self._tasks = []              # type: List[asyncio.Task]
@@ -462,26 +462,45 @@ class TorrentManager:
     DEFAULT_MIN_INTERVAL = 30
 
     async def _try_to_announce(self, event: EventType) -> bool:
+        server_port = self._server_port if self._server_port is not None else TorrentManager.FAKE_SERVER_PORT
+
+        tier = None
+        url = None
+        lift_url = False
         try:
-            server_port = self._server_port if self._server_port is not None else TorrentManager.FAKE_SERVER_PORT
-            await self._tracker_client.announce(server_port, event)
-            return True
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            self._logger.warning('exception on announce: %r', e)
+            for tier in self._torrent_info.announce_list:
+                for url in tier:
+                    try:
+                        client = create_tracker_client(url, self._download_info, self._our_peer_id)
+                        await client.announce(server_port, event)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        self._logger.warning('announce to "%s" failed: %r', url, e)
+                    else:
+                        peer_count = len(client.peers) if client.peers else 'no'
+                        self._logger.debug('announce to "%s" succeed (%s peers, interval = %s, min_interval = %s)',
+                                           url, peer_count, client.interval, client.min_interval)
+
+                        self._last_tracker_client = client
+                        lift_url = True
+                        return True
             return False
+        finally:
+            if lift_url:
+                tier.remove(url)
+                tier.insert(0, url)
 
     async def _execute_regular_announcements(self):
         try:
             while True:
-                if self._tracker_client.min_interval is not None:
-                    min_interval = self._tracker_client.min_interval
+                if self._last_tracker_client.min_interval is not None:
+                    min_interval = self._last_tracker_client.min_interval
                 else:
-                    min_interval = min(TorrentManager.DEFAULT_MIN_INTERVAL, self._tracker_client.interval)
+                    min_interval = min(TorrentManager.DEFAULT_MIN_INTERVAL, self._last_tracker_client.interval)
                 await asyncio.sleep(min_interval)
 
-                default_interval = self._tracker_client.interval
+                default_interval = self._last_tracker_client.interval
                 try:
                     await asyncio.wait_for(self._more_peers_requested.wait(), default_interval - min_interval)
                     more_peers = True
@@ -490,9 +509,9 @@ class TorrentManager:
                     more_peers = False
 
                 await self._try_to_announce(EventType.none)
-                # TODO: if more_peers, rerequest in case of exception
+                # TODO: if more_peers, maybe rerequest in case of exception
 
-                self._connect_to_peers(self._tracker_client.peers, more_peers)
+                self._connect_to_peers(self._last_tracker_client.peers, more_peers)
         finally:
             await self._try_to_announce(EventType.stopped)
 
@@ -613,11 +632,16 @@ class TorrentManager:
 
     ANNOUNCE_FAILED_SLEEP_TIME = 3
 
+    def _shuffle_announce_tiers(self):
+        for tier in self._torrent_info.announce_list:
+            random.shuffle(tier)
+
     async def run(self):
+        self._shuffle_announce_tiers()
         while not await self._try_to_announce(EventType.started):
             await asyncio.sleep(TorrentManager.ANNOUNCE_FAILED_SLEEP_TIME)
 
-        self._connect_to_peers(self._tracker_client.peers, False)
+        self._connect_to_peers(self._last_tracker_client.peers, False)
 
         self._tasks += [asyncio.ensure_future(coro) for coro in [
             self._execute_keeping_alive(),
@@ -640,7 +664,5 @@ class TorrentManager:
         self._request_executors.clear()
         self._tasks.clear()
         self._client_executors.clear()
-
-        self._tracker_client.close()
 
         self._file_structure.close()

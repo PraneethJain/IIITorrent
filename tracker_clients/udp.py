@@ -6,9 +6,8 @@ import urllib.parse
 from enum import Enum
 from typing import Optional
 
-from models import TorrentInfo
+from models import DownloadInfo
 from tracker_clients.base import BaseTrackerClient, EventType, TrackerError, parse_compact_peers_list
-from utils import humanize_size
 
 
 __all__ = ['UDPTrackerClient']
@@ -81,13 +80,13 @@ def pack(*data) -> bytes:
 
 
 class UDPTrackerClient(BaseTrackerClient):
-    def __init__(self, torrent_info: TorrentInfo,  parsed_announce_url: urllib.parse.ParseResult, our_peer_id: bytes,
+    def __init__(self, url: urllib.parse.ParseResult, download_info: DownloadInfo, our_peer_id: bytes,
                  *, loop: asyncio.AbstractEventLoop=None):
-        super().__init__(torrent_info, our_peer_id)
-        if parsed_announce_url.scheme != 'udp':
+        super().__init__(download_info, our_peer_id)
+        if url.scheme != 'udp':
             raise ValueError('TrackerUDPClient expects announce_url with UDP protocol')
-        self._host = parsed_announce_url.hostname
-        self._port = parsed_announce_url.port
+        self._host = url.hostname
+        self._port = url.port
 
         self._loop = asyncio.get_event_loop() if loop is None else loop
 
@@ -118,11 +117,6 @@ class UDPTrackerClient(BaseTrackerClient):
                 expected_action.name, actual_action.name))
 
     async def announce(self, server_port: int, event: EventType):
-        logger.debug('announce %s (uploaded = %s, downloaded = %s, left = %s)', event,
-                     humanize_size(self._statistics.uploaded_per_session),
-                     humanize_size(self._statistics.downloaded_per_session),
-                     humanize_size(self._download_info.bytes_left))
-
         transport, protocol = await self._loop.create_datagram_endpoint(
             DatagramReaderProtocol, remote_addr=(self._host, self._port))
 
@@ -168,8 +162,3 @@ class UDPTrackerClient(BaseTrackerClient):
         self._peers = parse_compact_peers_list(compact_peer_list)
 
         transport.close()
-
-        logger.debug('%s peers, interval = %s, min_interval = %s', len(self._peers), self.interval, self.min_interval)
-
-    def close(self):
-        pass
