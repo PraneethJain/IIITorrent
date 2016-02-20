@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Tuple, Sequence, Iterable, cast, Iterat
 from file_structure import FileStructure
 from models import BlockRequestFuture, DownloadInfo, Peer, TorrentInfo
 from peer_tcp_client import PeerTCPClient
-from tracker_http_client import TrackerHTTPClient
+from tracker_clients import create_tracker_client, EventType
 from utils import humanize_size, floor_to
 
 
@@ -68,7 +68,7 @@ class TorrentManager:
         self._logger = logging.getLogger('"{}"'.format(short_name))
         self._logger.setLevel(TorrentManager.LOGGER_LEVEL)
 
-        self._tracker_client = TrackerHTTPClient(self._torrent_info, self._our_peer_id)
+        self._tracker_client = create_tracker_client(self._torrent_info, self._our_peer_id)
         self._peer_data = {}  # type: Dict[Peer, PeerData]
 
         self._client_executors = {}   # type: Dict[Peer, asyncio.Task]
@@ -461,7 +461,7 @@ class TorrentManager:
     FAKE_SERVER_PORT = 6881
     DEFAULT_MIN_INTERVAL = 30
 
-    async def _try_to_announce(self, event: Optional[str]) -> bool:
+    async def _try_to_announce(self, event: EventType) -> bool:
         try:
             server_port = self._server_port if self._server_port is not None else TorrentManager.FAKE_SERVER_PORT
             await self._tracker_client.announce(server_port, event)
@@ -489,11 +489,12 @@ class TorrentManager:
                 except asyncio.TimeoutError:
                     more_peers = False
 
-                await self._try_to_announce(None)
+                await self._try_to_announce(EventType.none)
+                # TODO: if more_peers, rerequest in case of exception
 
                 self._connect_to_peers(self._tracker_client.peers, more_peers)
         finally:
-            await self._try_to_announce('stopped')
+            await self._try_to_announce(EventType.stopped)
 
     async def _download(self):
         self._non_started_pieces = self._get_non_finished_pieces()
@@ -512,7 +513,7 @@ class TorrentManager:
         await asyncio.wait(self._request_executors)
 
         self._download_info.complete = True
-        await self._try_to_announce('completed')
+        await self._try_to_announce(EventType.completed)
         self._logger.info('file download complete')
 
         # for peer, data in self._peer_data.items():
@@ -613,7 +614,7 @@ class TorrentManager:
     ANNOUNCE_FAILED_SLEEP_TIME = 3
 
     async def run(self):
-        while not await self._try_to_announce('started'):
+        while not await self._try_to_announce(EventType.started):
             await asyncio.sleep(TorrentManager.ANNOUNCE_FAILED_SLEEP_TIME)
 
         self._connect_to_peers(self._tracker_client.peers, False)

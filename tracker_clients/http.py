@@ -1,48 +1,32 @@
 import logging
-import re
+import urllib.parse
 from collections import OrderedDict
-from typing import List, Optional, cast, Sequence
+from typing import cast, Optional
 
 import aiohttp
 import bencodepy
 
-from models import DownloadInfo, Peer, TorrentInfo
-from utils import grouper, humanize_size
+from models import Peer, TorrentInfo
+from tracker_clients.base import BaseTrackerClient, TrackerError, parse_compact_peers_list, EventType
+from utils import humanize_size
+
+
+__all__ = ['HTTPTrackerClient']
+
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
-class TrackerError(Exception):
-    pass
-
-
-class TrackerHTTPClient:
-    def __init__(self, torrent_info: TorrentInfo, our_peer_id: bytes):
-        if re.match(r'https?://', torrent_info.announce_url) is None:
+class HTTPTrackerClient(BaseTrackerClient):
+    def __init__(self, torrent_info: TorrentInfo, parsed_announce_url: urllib.parse.ParseResult, our_peer_id: bytes):
+        super().__init__(torrent_info, our_peer_id)
+        if parsed_announce_url.scheme not in ('http', 'https'):
             raise ValueError('TrackerHTTPClient expects announce_url with HTTP and HTTPS protocol')
 
-        self._torrent_info = torrent_info
-        self._download_info = torrent_info.download_info  # type: DownloadInfo
-        self._statistics = self._download_info.session_statistics
-
-        self._our_peer_id = our_peer_id
+        self._tracker_id = None   # type: Optional[bytes]
 
         self._session = aiohttp.ClientSession()
-
-        self._tracker_id = None   # type: Optional[bytes]
-        self.interval = None      # type: int
-        self.min_interval = None  # type: Optional[int]
-        self.seed_count = None    # type: Optional[int]
-        self.leech_count = None   # type: Optional[int]
-
-        self._peers = set()
-
-    @staticmethod
-    def _parse_compact_peers_list(data: bytes) -> List[Peer]:
-        if len(data) % 6 != 0:
-            raise ValueError('Invalid length of a compact representation of peers')
-        return list(map(Peer.from_compact_form, grouper(data, 6)))
 
     def _handle_primary_response_fields(self, response: OrderedDict):
         if b'failure reason' in response:
@@ -56,7 +40,7 @@ class TrackerHTTPClient:
 
         peers = response[b'peers']
         if isinstance(peers, bytes):
-            self._peers = TrackerHTTPClient._parse_compact_peers_list(peers)
+            self._peers = parse_compact_peers_list(peers)
         else:
             self._peers = list(map(Peer.from_dict, peers))
 
@@ -73,8 +57,8 @@ class TrackerHTTPClient:
 
     REQUEST_TIMEOUT = 5
 
-    async def announce(self, server_port: int, event: Optional[str]):
-        logger.debug('announce %s (uploaded = %s, downloaded = %s, left = %s)', event,
+    async def announce(self, server_port: int, event: EventType):
+        logger.debug('announce %s (uploaded = %s, downloaded = %s, left = %s)', event.name,
                      humanize_size(self._statistics.uploaded_per_session),
                      humanize_size(self._statistics.downloaded_per_session),
                      humanize_size(self._download_info.bytes_left))
@@ -88,18 +72,18 @@ class TrackerHTTPClient:
             'left': self._download_info.bytes_left,
             'compact': 1,
         }
-        if event is not None:
-            params['event'] = event
+        if event != EventType.none:
+            params['event'] = event.name
         if self._tracker_id is not None:
             params['trackerid'] = self._tracker_id
 
-        with aiohttp.Timeout(TrackerHTTPClient.REQUEST_TIMEOUT):
+        with aiohttp.Timeout(HTTPTrackerClient.REQUEST_TIMEOUT):
             async with self._session.get(self._torrent_info.announce_url, params=params) as conn:
                 response = await conn.read()
 
         response = bencodepy.decode(response)
         if not response:
-            if event == 'started':
+            if event == EventType.started:
                 raise ValueError('Tracker returned an empty answer on start announcement')
             return
         response = cast(OrderedDict, response)
@@ -108,10 +92,6 @@ class TrackerHTTPClient:
         self._handle_optional_response_fields(response)
 
         logger.debug('%s peers, interval = %s, min_interval = %s', len(self._peers), self.interval, self.min_interval)
-
-    @property
-    def peers(self) -> Sequence[Peer]:
-        return self._peers
 
     def close(self):
         self._session.close()
