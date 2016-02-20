@@ -35,7 +35,7 @@ class PeerTCPServer:
             if isinstance(e, asyncio.CancelledError):
                 raise
             else:
-                logger.debug("%s wasn't accepted because of %s", peer, repr(e))
+                logger.debug("%s wasn't accepted because of %r", peer, e)
         else:
             self._torrent_managers[info_hash].accept_client(peer, client)
 
@@ -48,7 +48,7 @@ class PeerTCPServer:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.debug('exception on starting server on port %s: %s', port, repr(e))
+                logger.debug('exception on starting server on port %s: %r', port, e)
             else:
                 self._port = port
                 logger.info('server started on port %s', port)

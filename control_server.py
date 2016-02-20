@@ -74,7 +74,7 @@ class ControlServer:
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.warning('%s disconnected because of %s', addr_repr, repr(e))
+            logger.warning('%s disconnected because of %r', addr_repr, e)
         finally:
             writer.close()
 
@@ -88,7 +88,7 @@ class ControlServer:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.debug('exception on starting server on port %s: %s', port, repr(e))
+                logger.debug('exception on starting server on port %s: %r', port, e)
             else:
                 logger.info('server started on port %s', port)
                 return

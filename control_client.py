@@ -29,7 +29,7 @@ class ControlClient:
                 self.close()
                 self._reader = None
                 self._writer = None
-                logger.debug('failed to connect to port %s: %s', port, repr(e))
+                logger.debug('failed to connect to port %s: %r', port, e)
             else:
                 break
         else:

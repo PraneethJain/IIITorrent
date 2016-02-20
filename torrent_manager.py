@@ -103,7 +103,7 @@ class TorrentManager:
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            self._logger.debug('%s disconnected because of %s', peer, repr(e))
+            self._logger.debug('%s disconnected because of %r', peer, e)
         finally:
             if peer in self._peer_data:
                 self._statistics.peer_count -= 1
@@ -469,7 +469,7 @@ class TorrentManager:
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            self._logger.warning('exception on announce: %s', repr(e))
+            self._logger.warning('exception on announce: %r', e)
             return False
 
     async def _execute_regular_announcements(self):
