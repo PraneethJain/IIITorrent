@@ -30,8 +30,8 @@ class ControlManager:
     async def start(self):
         await self._server.start()
 
-    def _start_torrent_manager(self, info_hash: bytes):
-        torrent_info = self._torrents[info_hash]
+    def _start_torrent_manager(self, torrent_info: TorrentInfo):
+        info_hash = torrent_info.download_info.info_hash
 
         manager = TorrentManager(torrent_info, self._our_peer_id, self._server.port)
         self._torrent_managers[info_hash] = manager
@@ -42,10 +42,9 @@ class ControlManager:
         if info_hash in self._torrents:
             raise ValueError('This torrent is already added')
 
-        self._torrents[info_hash] = torrent_info
-
         if not torrent_info.paused:
-            self._start_torrent_manager(info_hash)
+            self._start_torrent_manager(torrent_info)
+        self._torrents[info_hash] = torrent_info
 
     def resume(self, info_hash: bytes):
         if info_hash not in self._torrents:
@@ -54,7 +53,7 @@ class ControlManager:
         if not torrent_info.paused:
             raise ValueError('The torrent is already running')
 
-        self._start_torrent_manager(info_hash)
+        self._start_torrent_manager(torrent_info)
 
         torrent_info.paused = False
 
@@ -76,10 +75,9 @@ class ControlManager:
             raise ValueError('Torrent not found')
         torrent_info = self._torrents[info_hash]
 
+        del self._torrents[info_hash]
         if not torrent_info.paused:
             await self._stop_torrent_manager(info_hash)
-
-        del self._torrents[info_hash]
 
     async def pause(self, info_hash: bytes):
         if info_hash not in self._torrents:

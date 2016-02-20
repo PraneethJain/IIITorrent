@@ -194,7 +194,7 @@ def main():
         logging.disable(logging.INFO)
     try:
         arguments.func(arguments)
-    except (ValueError, RuntimeError) as e:
+    except (IOError, ValueError, RuntimeError) as e:
         print('Error: {}'.format(e), file=sys.stderr)
 
 

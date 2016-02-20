@@ -59,6 +59,15 @@ class Peer:
         return '{}:{}'.format(self._host, self._port)
 
 
+def get_utf8(dictionary: OrderedDict, key: bytes):
+    assert isinstance(key, bytes)
+
+    suffixed_key = key + b'.utf-8'
+    if suffixed_key in dictionary:
+        return dictionary[suffixed_key]
+    return dictionary[key]
+
+
 class FileInfo:
     def __init__(self, length: int, path: List[str], *, md5sum: str=None):
         self._length = length
@@ -82,9 +91,9 @@ class FileInfo:
 
     @classmethod
     def from_dict(cls, dictionary: OrderedDict):
-        if b'path' in dictionary:
-            path = list(map(bytes.decode, dictionary[b'path']))
-        else:
+        try:
+            path = list(map(bytes.decode, get_utf8(dictionary, b'path')))
+        except KeyError:
             path = []
 
         return cls(dictionary[b'length'], path, md5sum=dictionary.get(b'md5sum'))
@@ -415,7 +424,7 @@ class DownloadInfo:
             files = [FileInfo.from_dict(dictionary)]
 
         return cls(info_hash,
-                   dictionary[b'piece length'], piece_hashes, dictionary[b'name'].decode(), files,
+                   dictionary[b'piece length'], piece_hashes, get_utf8(dictionary, b'name').decode(), files,
                    private=dictionary.get('private', False))
 
     @property
