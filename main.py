@@ -70,7 +70,7 @@ def run_daemon(args):
 def show_handler(args):
     torrent_info = TorrentInfo.from_file(args.filename, download_dir=None)
     content_description = torrent_formatters.join_lines(
-        torrent_formatters.format_title(torrent_info) + torrent_formatters.format_content(torrent_info))
+        torrent_formatters.format_title(torrent_info, True) + torrent_formatters.format_content(torrent_info))
     print(content_description, end='')
 
 
@@ -112,7 +112,7 @@ async def control_action_handler(args):
             await client.execute(partial(action, info_hash=info.download_info.info_hash))
 
 
-def status_server_handler(manager: ControlManager) -> str:
+def status_server_handler(manager: ControlManager, long_format: bool) -> str:
     torrents = list(manager.get_torrents())
     if not torrents:
         return 'No torrents added'
@@ -120,13 +120,13 @@ def status_server_handler(manager: ControlManager) -> str:
     torrents.sort(key=lambda info: info.download_info.suggested_name)
     return '\n'.join(
         torrent_formatters.join_lines(
-            torrent_formatters.format_title(info) + torrent_formatters.format_status(info))
+            torrent_formatters.format_title(info, long_format) + torrent_formatters.format_status(info, long_format))
         for info in torrents).rstrip()
 
 
 async def status_handler(args):
     async with ControlClient() as client:
-        status_text = await client.execute(status_server_handler)
+        status_text = await client.execute(partial(status_server_handler, long_format=args.verbose))
 
     print(status_text)
 
@@ -187,6 +187,8 @@ def main():
         subparser.set_defaults(func=partial(run_in_event_loop, control_action_handler))
 
     subparser = subparsers.add_parser('status', help='Show status')
+    subparser.add_argument('-v', '--verbose', action='store_true',
+                           help='Increase output verbosity')
     subparser.set_defaults(func=partial(run_in_event_loop, status_handler))
 
     arguments = parser.parse_args()
