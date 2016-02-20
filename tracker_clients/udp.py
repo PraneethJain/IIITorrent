@@ -34,17 +34,18 @@ class DatagramReaderProtocol:
         if self._waiter is not None:
             raise RuntimeError('Another coroutine is already waiting for incoming data')
 
-        if not self._connection_lost and not self._buffer:
+        if self._exception is None and not self._connection_lost and not self._buffer:
             self._waiter = asyncio.Future()
             try:
                 await self._waiter
             finally:
                 self._waiter = None
+        if self._exception is not None:
+            exc = self._exception
+            self._exception = None
+            raise exc
         if self._connection_lost:
-            if self._exception is None:
-                raise ConnectionResetError('Connection lost')
-            else:
-                raise self._exception
+            raise ConnectionResetError('Connection lost')
 
         buffer = self._buffer
         self._buffer = bytearray()
@@ -56,6 +57,10 @@ class DatagramReaderProtocol:
 
     def datagram_received(self, data: bytes, addr: tuple):
         self._buffer.extend(data)
+        self._wakeup_waiter()
+
+    def error_received(self, exc: Exception):
+        self._exception = exc
         self._wakeup_waiter()
 
     def connection_lost(self, exc: Exception):
@@ -124,44 +129,45 @@ class UDPTrackerClient(BaseTrackerClient):
         transport, protocol = await self._loop.create_datagram_endpoint(
             DatagramReaderProtocol, remote_addr=(self._host, self._port))
 
-        transaction_id = random.randint(0, 2 ** 32 - 1)
-        request = pack(
-            'Q', UDPTrackerClient.MAGIC_CONNECTION_ID,
-            'I', ActionType.connect.value,
-            'I', transaction_id,
-        )
-        transport.sendto(request)
+        try:
+            transaction_id = random.randint(0, 2 ** 32 - 1)
+            request = pack(
+                'Q', UDPTrackerClient.MAGIC_CONNECTION_ID,
+                'I', ActionType.connect.value,
+                'I', transaction_id,
+            )
+            transport.sendto(request)
 
-        response = await asyncio.wait_for(protocol.recv(), UDPTrackerClient.REQUEST_TIMEOUT)
-        UDPTrackerClient._check_response(response, transaction_id, ActionType.connect)
-        (connection_id,) = struct.unpack_from('!Q', response, UDPTrackerClient.RESPONSE_HEADER_LEN)
+            response = await asyncio.wait_for(protocol.recv(), UDPTrackerClient.REQUEST_TIMEOUT)
+            UDPTrackerClient._check_response(response, transaction_id, ActionType.connect)
+            (connection_id,) = struct.unpack_from('!Q', response, UDPTrackerClient.RESPONSE_HEADER_LEN)
 
-        request = pack(
-            'Q', connection_id,
-            'I', ActionType.announce.value,
-            'I', transaction_id,
-            '20s', self._download_info.info_hash,
-            '20s', self._our_peer_id,
-            'Q', self._statistics.total_downloaded,
-            'Q', self._download_info.bytes_left,
-            'Q', self._statistics.total_uploaded,
-            'I', event.value,
-            'I', 0,  # IP address: default
-            'I', self._key,  # Key
-            'i', -1,  # numwant: default
-            'H', server_port,
-        )
-        assert len(request) == 98
-        transport.sendto(request)
+            request = pack(
+                'Q', connection_id,
+                'I', ActionType.announce.value,
+                'I', transaction_id,
+                '20s', self._download_info.info_hash,
+                '20s', self._our_peer_id,
+                'Q', self._statistics.total_downloaded,
+                'Q', self._download_info.bytes_left,
+                'Q', self._statistics.total_uploaded,
+                'I', event.value,
+                'I', 0,  # IP address: default
+                'I', self._key,  # Key
+                'i', -1,  # numwant: default
+                'H', server_port,
+            )
+            assert len(request) == 98
+            transport.sendto(request)
 
-        response = await asyncio.wait_for(protocol.recv(), UDPTrackerClient.REQUEST_TIMEOUT)
-        UDPTrackerClient._check_response(response, transaction_id, ActionType.announce)
-        fmt = '!3I'
-        self.interval, self.leech_count, self.seed_count = struct.unpack_from(
-            fmt, response, UDPTrackerClient.RESPONSE_HEADER_LEN)
-        self.min_interval = self.interval
+            response = await asyncio.wait_for(protocol.recv(), UDPTrackerClient.REQUEST_TIMEOUT)
+            UDPTrackerClient._check_response(response, transaction_id, ActionType.announce)
+            fmt = '!3I'
+            self.interval, self.leech_count, self.seed_count = struct.unpack_from(
+                fmt, response, UDPTrackerClient.RESPONSE_HEADER_LEN)
+            self.min_interval = self.interval
 
-        compact_peer_list = response[UDPTrackerClient.RESPONSE_HEADER_LEN + struct.calcsize(fmt):]
-        self._peers = parse_compact_peers_list(compact_peer_list)
-
-        transport.close()
+            compact_peer_list = response[UDPTrackerClient.RESPONSE_HEADER_LEN + struct.calcsize(fmt):]
+            self._peers = parse_compact_peers_list(compact_peer_list)
+        finally:
+            transport.close()
