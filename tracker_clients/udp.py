@@ -100,7 +100,8 @@ class UDPTrackerClient(BaseTrackerClient):
     RESPONSE_HEADER_FMT = '!II'
     RESPONSE_HEADER_LEN = struct.calcsize(RESPONSE_HEADER_FMT)
 
-    def _check_response(self, response: bytes, expected_transaction_id: bytes, expected_action: ActionType):
+    @staticmethod
+    def _check_response(response: bytes, expected_transaction_id: bytes, expected_action: ActionType):
         actual_action, actual_transaction_id = struct.unpack_from(UDPTrackerClient.RESPONSE_HEADER_FMT, response)
 
         if actual_transaction_id != expected_transaction_id:
@@ -116,6 +117,9 @@ class UDPTrackerClient(BaseTrackerClient):
             raise ValueError('Unexpected action ID (expected {}, got {})'.format(
                 expected_action.name, actual_action.name))
 
+    REQUEST_TIMEOUT = 12
+    # FIXME: Repeat requests as described in BEP 0015, but remember that we may have other trackers in announce-list
+
     async def announce(self, server_port: int, event: EventType):
         transport, protocol = await self._loop.create_datagram_endpoint(
             DatagramReaderProtocol, remote_addr=(self._host, self._port))
@@ -127,10 +131,9 @@ class UDPTrackerClient(BaseTrackerClient):
             'I', transaction_id,
         )
         transport.sendto(request)
-        # TODO: timeouts, rerequests
 
-        response = await protocol.recv()
-        self._check_response(response, transaction_id, ActionType.connect)
+        response = await asyncio.wait_for(protocol.recv(), UDPTrackerClient.REQUEST_TIMEOUT)
+        UDPTrackerClient._check_response(response, transaction_id, ActionType.connect)
         (connection_id,) = struct.unpack_from('!Q', response, UDPTrackerClient.RESPONSE_HEADER_LEN)
 
         request = pack(
@@ -151,8 +154,8 @@ class UDPTrackerClient(BaseTrackerClient):
         assert len(request) == 98
         transport.sendto(request)
 
-        response = await protocol.recv()
-        self._check_response(response, transaction_id, ActionType.announce)
+        response = await asyncio.wait_for(protocol.recv(), UDPTrackerClient.REQUEST_TIMEOUT)
+        UDPTrackerClient._check_response(response, transaction_id, ActionType.announce)
         fmt = '!3I'
         self.interval, self.leech_count, self.seed_count = struct.unpack_from(
             fmt, response, UDPTrackerClient.RESPONSE_HEADER_LEN)
