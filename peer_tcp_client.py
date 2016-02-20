@@ -60,7 +60,7 @@ class PeerTCPClient:
 
     CONNECT_TIMEOUT = 5
     READ_TIMEOUT = 5
-    MAX_SILENCE_DURATION = 5 * 60
+    MAX_SILENCE_DURATION = 3 * 60
     WRITE_TIMEOUT = 5
 
     def _send_protocol_data(self):

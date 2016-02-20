@@ -17,7 +17,7 @@ UNIT_PREFIXES = 'KMG'
 
 def humanize_size(size: int) -> str:
     if size < UNIT_BASE:
-        return '{} bytes'.format(size)
+        return '{:.0f} bytes'.format(size)
     unit = floor(log(size, UNIT_BASE))
     unit_name = UNIT_PREFIXES[min(unit, len(UNIT_PREFIXES)) - 1] + 'iB'
     return '{:.1f} {}'.format(size / UNIT_BASE ** unit, unit_name)

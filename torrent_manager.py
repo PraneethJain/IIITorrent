@@ -85,6 +85,7 @@ class TorrentManager:
         self._endgame_mode = False
         self._tasks_waiting_for_more_peers = 0
         self._more_peers_requested = asyncio.Event()
+        self._last_reconnect_time = 0  # type: Optional[float]
         self._request_deque_relevant = asyncio.Event()
 
         self._file_structure = FileStructure(torrent_info.download_dir, torrent_info.download_info)
@@ -118,6 +119,8 @@ class TorrentManager:
                     del self._statistics.peer_last_upload[peer]
 
             client.close()
+
+            del self._client_executors[peer]
 
     KEEP_ALIVE_TIMEOUT = 2 * 60
 
@@ -343,11 +346,20 @@ class TorrentManager:
     STARTING_DURATION = 5
     NO_PEERS_SLEEP_TIME_ON_STARTING = 1
 
+    RECONNECT_TIMEOUT = 50
+
     async def _wait_more_peers(self):
         self._tasks_waiting_for_more_peers += 1
         download_peers_active = TorrentManager.DOWNLOAD_PEER_COUNT - self._tasks_waiting_for_more_peers
         if download_peers_active <= TorrentManager.DOWNLOAD_PEERS_ACTIVE_TO_REQUEST_MORE_PEERS and \
                 len(self._peer_data) < TorrentManager.MAX_PEERS_TO_ACTIVELY_CONNECT:
+            cur_time = time.time()
+            if self._last_reconnect_time is None or \
+                    cur_time - self._last_reconnect_time >= TorrentManager.RECONNECT_TIMEOUT:
+                # This can recover connections to peers after temporary loss of Internet connection
+                self._logger.info('trying to reconnect to peers')
+                self._connect_to_peers(self._last_tracker_client.peers, True)
+
             self._more_peers_requested.set()
 
         if time.time() - self._download_start_time <= TorrentManager.STARTING_DURATION:
@@ -435,22 +447,24 @@ class TorrentManager:
 
     def _connect_to_peers(self, peers: Sequence[Peer], force: bool):
         peers = list({peer for peer in peers
-                      if peer not in self._peer_data and not self._download_info.is_banned(peer)})
+                      if peer not in self._client_executors and not self._download_info.is_banned(peer)})
         if force:
             max_peers_count = TorrentManager.MAX_PEERS_TO_ACCEPT
         else:
             max_peers_count = TorrentManager.MAX_PEERS_TO_ACTIVELY_CONNECT
         peers_to_connect_count = max(max_peers_count - len(self._peer_data), 0)
-        self._logger.debug('connecting to up to %s new peers', min(len(peers), peers_to_connect_count))
+        self._logger.debug('trying to connect to %s new peers', min(len(peers), peers_to_connect_count))
 
         for peer in peers[:peers_to_connect_count]:
             client = PeerTCPClient(self._our_peer_id, peer)
             self._client_executors[peer] = asyncio.ensure_future(
                 self._execute_peer_client(peer, client, need_connect=True))
 
+        self._last_reconnect_time = time.time()
+
     def accept_client(self, peer: Peer, client: PeerTCPClient):
         if len(self._peer_data) > TorrentManager.MAX_PEERS_TO_ACCEPT or self._download_info.is_banned(peer) or \
-                peer in self._peer_data:
+                peer in self._client_executors:
             client.close()
             return
         self._logger.debug('accepted connection from %s', peer)
@@ -459,7 +473,7 @@ class TorrentManager:
             self._execute_peer_client(peer, client, need_connect=False))
 
     FAKE_SERVER_PORT = 6881
-    DEFAULT_MIN_INTERVAL = 30
+    DEFAULT_MIN_INTERVAL = 90
 
     async def _try_to_announce(self, event: EventType) -> bool:
         server_port = self._server_port if self._server_port is not None else TorrentManager.FAKE_SERVER_PORT
@@ -641,7 +655,7 @@ class TorrentManager:
         while not await self._try_to_announce(EventType.started):
             await asyncio.sleep(TorrentManager.ANNOUNCE_FAILED_SLEEP_TIME)
 
-        self._connect_to_peers(self._last_tracker_client.peers, False)
+        self._connect_to_peers(self._last_tracker_client.peers, True)
 
         self._tasks += [asyncio.ensure_future(coro) for coro in [
             self._execute_keeping_alive(),
