@@ -16,10 +16,10 @@ from PyQt5.QtCore import Qt, QThread
 from PyQt5.QtGui import QIcon, QFont
 # noinspection PyUnresolvedReferences
 from PyQt5.QtWidgets import QWidget, QListWidget, QAbstractItemView, QLabel, QVBoxLayout, QProgressBar, \
-    QListWidgetItem, QMainWindow, QApplication
+    QListWidgetItem, QMainWindow, QApplication, QFileDialog, QMessageBox
 
 from control_manager import ControlManager
-from models import TorrentState
+from models import TorrentState, TorrentInfo
 from utils import humanize_speed, humanize_time, humanize_size
 
 
@@ -110,7 +110,8 @@ class MainWindow(QMainWindow):
         toolbar = self.addToolBar('Exits')
         toolbar.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         toolbar.setMovable(False)
-        toolbar.addAction(self._icon, 'Open')
+        self._add_action = toolbar.addAction(self._icon, 'Add')
+        self._add_action.triggered.connect(self._add_torrent_triggered)
         self._pause_action = toolbar.addAction(self._icon, 'Pause')
         self._pause_action.setEnabled(False)
         self._pause_action.triggered.connect(partial(self._control_action_triggered, self._control.pause))
@@ -146,7 +147,15 @@ class MainWindow(QMainWindow):
         item.setIcon(self._icon)
         item.setSizeHint(widget.sizeHint())
         item.setData(Qt.UserRole, state.info_hash)
-        self._list_widget.addItem(item)
+
+        items_upper = 0
+        for i in range(self._list_widget.count()):
+            prev_item = self._list_widget.item(i)
+            if self._list_widget.itemWidget(prev_item).state.suggested_name > state.suggested_name:
+                break
+            items_upper += 1
+        self._list_widget.insertItem(items_upper, item)
+
         self._list_widget.setItemWidget(item, widget)
         self._torrent_to_item[state.info_hash] = item
 
@@ -174,6 +183,19 @@ class MainWindow(QMainWindow):
             else:
                 self._pause_action.setEnabled(True)
             self._remove_action.setEnabled(True)
+
+    def _add_torrent_triggered(self):
+        filename, _ = QFileDialog.getOpenFileName(self, 'Add torrent', filter='Torrent file (*.torrent)')
+        if not filename:
+            return
+
+        try:
+            torrent_info = TorrentInfo.from_file(filename, download_dir=os.path.curdir)
+        except Exception as err:
+            QMessageBox.critical(self, 'Failed to add torrent', str(err))
+            return
+
+        self._control_thread.loop.call_soon_threadsafe(self._control.add, torrent_info)
 
     async def _invoke_control_action(self, action, info_hash: bytes):
         try:
@@ -238,7 +260,7 @@ class ControlManagerThread(QThread):
         self.wait()
 
 
-if __name__ == '__main__':
+def main():
     parser = argparse.ArgumentParser(description='A prototype of BitTorrent client (GUI)')
     parser.add_argument('--debug', action='store_true', help='Show debug messages')
     args = parser.parse_args()
@@ -254,4 +276,8 @@ if __name__ == '__main__':
 
     app.lastWindowClosed.connect(control_thread.stop)
     main_window = MainWindow(control_thread)
-    sys.exit(app.exec_())
+    return app.exec_()
+
+
+if __name__ == '__main__':
+    sys.exit(main())
