@@ -527,6 +527,7 @@ class TorrentState:
 
         self.suggested_name = download_info.suggested_name
         self.info_hash = download_info.info_hash
+        self.single_file_mode = download_info.single_file_mode
 
         self.total_piece_count = len(download_info.pieces)
         self.selected_piece_count = sum(1 for info in download_info.pieces if info.selected)

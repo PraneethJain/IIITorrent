@@ -30,6 +30,17 @@ logging.basicConfig(format='%(levelname)s %(asctime)s %(name)-23s %(message)s', 
 STATE_FILENAME = 'state.bin'
 
 
+ICON_DIRECTORY = os.path.join(os.path.dirname(__file__), 'icons')
+
+
+def load_icon(name: str):
+    return QIcon(os.path.join(ICON_DIRECTORY, name + '.svg'))
+
+
+file_icon = load_icon('file')
+directory_icon = load_icon('directory')
+
+
 class TorrentAddingDialog(QDialog):
     SELECTION_LABEL_FORMAT = 'Selected {} files ({})'
 
@@ -39,8 +50,11 @@ class TorrentAddingDialog(QDialog):
         item.setText(0, name)
         if isinstance(node, FileInfo):
             item.setText(1, humanize_size(node.length))
+            item.setIcon(0, file_icon)
             self._file_items.append((node, item))
             return
+
+        item.setIcon(0, directory_icon)
         for name, child in node.items():
             self._traverse_file_tree(name, child, item)
 
@@ -264,22 +278,27 @@ class MainWindow(QMainWindow):
         self._control_thread = control_thread
         control = control_thread.control
 
-        self._icon = QIcon('exit24x24.png')
-
         toolbar = self.addToolBar('Exits')
         toolbar.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         toolbar.setMovable(False)
-        self._add_action = toolbar.addAction(self._icon, 'Add')
+
+        self._add_action = toolbar.addAction(load_icon('add'), 'Add')
         self._add_action.triggered.connect(self._add_torrent_triggered)
-        self._pause_action = toolbar.addAction(self._icon, 'Pause')
+
+        self._pause_action = toolbar.addAction(load_icon('pause'), 'Pause')
         self._pause_action.setEnabled(False)
         self._pause_action.triggered.connect(partial(self._control_action_triggered, control.pause))
-        self._resume_action = toolbar.addAction(self._icon, 'Resume')
+
+        self._resume_action = toolbar.addAction(load_icon('resume'), 'Resume')
         self._resume_action.setEnabled(False)
         self._resume_action.triggered.connect(partial(self._control_action_triggered, control.resume))
-        self._remove_action = toolbar.addAction(self._icon, 'Remove')
+
+        self._remove_action = toolbar.addAction(load_icon('remove'), 'Remove')
         self._remove_action.setEnabled(False)
         self._remove_action.triggered.connect(partial(self._control_action_triggered, control.remove))
+
+        self._about_action = toolbar.addAction(load_icon('about'), 'About')
+        self._about_action.triggered.connect(self._show_about)
 
         self._list_widget = QListWidget()
         self._list_widget.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -303,7 +322,7 @@ class MainWindow(QMainWindow):
         widget.state = state
 
         item = QListWidgetItem()
-        item.setIcon(self._icon)
+        item.setIcon(file_icon if state.single_file_mode else directory_icon)
         item.setSizeHint(widget.sizeHint())
         item.setData(Qt.UserRole, state.info_hash)
 
@@ -372,6 +391,11 @@ class MainWindow(QMainWindow):
             info_hash = item.data(Qt.UserRole)
             asyncio.run_coroutine_threadsafe(self._invoke_control_action(action, info_hash), self._control_thread.loop)
 
+    def _show_about(self):
+        QMessageBox.about(self, 'About', 'Prototype of BitTorrent client\n'
+                                         'Copyright (c) 2016 Alexander Borzunov\n'
+                                         'Icons made by Google and Freepik from www.flaticon.com')
+
 
 class ControlManagerThread(QThread):
     def __init__(self, control: ControlManager):
@@ -431,6 +455,7 @@ def main():
         logging.disable(logging.INFO)
 
     app = QApplication(sys.argv)
+    app.setWindowIcon(load_icon('logo'))
 
     control = ControlManager()
     control_thread = ControlManagerThread(control)
