@@ -4,7 +4,7 @@ import logging
 import pickle
 from typing import Dict, List
 
-from models import generate_peer_id, TorrentInfo
+from models import generate_peer_id, TorrentInfo, TorrentState
 from peer_tcp_server import PeerTCPServer
 from torrent_manager import TorrentManager
 from utils import import_signals
@@ -18,6 +18,11 @@ logger.setLevel(logging.DEBUG)
 
 
 class ControlManager(QObject):
+    if pyqtSignal:
+        torrent_added = pyqtSignal(TorrentState)
+        torrent_changed = pyqtSignal(TorrentState)
+        torrent_removed = pyqtSignal(bytes)
+
     def __init__(self):
         super().__init__()
 
@@ -40,14 +45,9 @@ class ControlManager(QObject):
         info_hash = torrent_info.download_info.info_hash
 
         manager = TorrentManager(torrent_info, self._our_peer_id, self._server.port)
+        manager.torrent_changed.connect(self.torrent_changed)
         self._torrent_managers[info_hash] = manager
         self._torrent_manager_executors[info_hash] = asyncio.ensure_future(manager.run())
-
-    if pyqtSignal:
-        torrents_changed = pyqtSignal()
-        # torrent_added, torrent_changed, torrent_removed
-        # Information message should be formed in ControlManager thread and then
-        # transferred as strings to avoid lock problems
 
     def add(self, torrent_info: TorrentInfo):
         info_hash = torrent_info.download_info.info_hash
@@ -59,7 +59,7 @@ class ControlManager(QObject):
         self._torrents[info_hash] = torrent_info
 
         if pyqtSignal:
-            self.torrents_changed.emit()
+            self.torrent_added.emit(TorrentState(torrent_info))
 
     def resume(self, info_hash: bytes):
         if info_hash not in self._torrents:
@@ -71,6 +71,9 @@ class ControlManager(QObject):
         self._start_torrent_manager(torrent_info)
 
         torrent_info.paused = False
+
+        if pyqtSignal:
+            self.torrent_changed.emit(TorrentState(torrent_info))
 
     async def _stop_torrent_manager(self, info_hash: bytes):
         manager_executor = self._torrent_manager_executors[info_hash]
@@ -94,6 +97,9 @@ class ControlManager(QObject):
         if not torrent_info.paused:
             await self._stop_torrent_manager(info_hash)
 
+        if pyqtSignal:
+            self.torrent_removed.emit(info_hash)
+
     async def pause(self, info_hash: bytes):
         if info_hash not in self._torrents:
             raise ValueError('Torrent not found')
@@ -104,6 +110,9 @@ class ControlManager(QObject):
         await self._stop_torrent_manager(info_hash)
 
         torrent_info.paused = True
+
+        if pyqtSignal:
+            self.torrent_changed.emit(TorrentState(torrent_info))
 
     def dump(self, f):
         torrent_list = []

@@ -1,10 +1,13 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
+import argparse
 import asyncio
 import logging
 import os
 import sys
 from contextlib import closing
+from math import floor
+from typing import Dict
 
 # noinspection PyUnresolvedReferences
 from PyQt5.QtCore import Qt, QThread
@@ -15,13 +18,74 @@ from PyQt5.QtWidgets import QWidget, QListWidget, QAbstractItemView, QLabel, QVB
     QListWidgetItem, QMainWindow, QApplication
 
 from control_manager import ControlManager
-from models import TorrentInfo
+from models import TorrentState
+from utils import humanize_speed, humanize_time, humanize_size
 
 
 logging.basicConfig(format='%(levelname)s %(asctime)s %(name)-23s %(message)s', datefmt='%H:%M:%S')
 
 
 STATE_FILENAME = 'state.bin'
+
+
+class TorrentWidgetItem(QWidget):
+    _name_font = QFont()
+    _name_font.setBold(True)
+
+    _stats_font = QFont()
+    _stats_font.setPointSize(10)
+
+    def __init__(self):
+        super().__init__()
+
+        self._name_label = QLabel()
+        self._name_label.setFont(TorrentWidgetItem._name_font)
+
+        self._upper_status_label = QLabel()
+        self._upper_status_label.setFont(TorrentWidgetItem._stats_font)
+
+        self._progress_bar = QProgressBar()
+        self._progress_bar.setFixedHeight(15)
+        self._progress_bar.setMaximum(1000)
+
+        self._lower_status_label = QLabel()
+        self._lower_status_label.setFont(TorrentWidgetItem._stats_font)
+
+        vbox = QVBoxLayout()
+        vbox.addWidget(self._name_label)
+        vbox.addWidget(self._upper_status_label)
+        vbox.addWidget(self._progress_bar)
+        vbox.addWidget(self._lower_status_label)
+
+        self.setLayout(vbox)
+
+    def set_state(self, state: TorrentState):
+        self._name_label.setText(state.suggested_name)  # FIXME: XSS
+
+        if state.downloaded_size < state.selected_size:
+            status_text = '{} of {}'.format(humanize_size(state.downloaded_size), humanize_size(state.selected_size))
+        else:
+            status_text = '{} (complete)'.format(humanize_size(state.selected_size))
+        status_text += ', Ratio: {:.1f}'.format(state.ratio)
+        self._upper_status_label.setText(status_text)
+
+        self._progress_bar.setValue(floor(state.progress * 1000))
+
+        if state.paused:
+            status_text = 'Paused'
+        elif state.complete:
+            status_text = 'Uploading to {} of {} peers'.format(state.uploading_peer_count, state.total_peer_count)
+            if state.upload_speed:
+                status_text += ' on {}'.format(humanize_speed(state.upload_speed))
+        else:
+            status_text = 'Downloading from {} of {} peers'.format(
+                state.downloading_peer_count, state.total_peer_count)
+            if state.download_speed:
+                status_text += ' on {}'.format(humanize_speed(state.download_speed))
+            eta_seconds = state.eta_seconds
+            if eta_seconds is not None:
+                status_text += ', {} remaining'.format(humanize_time(eta_seconds) if eta_seconds is not None else None)
+        self._lower_status_label.setText(status_text)
 
 
 class MainWindow(QMainWindow):
@@ -42,57 +106,38 @@ class MainWindow(QMainWindow):
 
         self._list_widget = QListWidget()
         self._list_widget.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
-
-        self._name_font = QFont()
-        self._name_font.setBold(True)
-        self._stats_font = QFont()
-        self._stats_font.setPointSize(10)
+        self._torrent_to_item = {}  # type: Dict[bytes, QListWidgetItem]
 
         self.setCentralWidget(self._list_widget)
 
-        self.setGeometry(300, 300, 500, 450)
+        self.setMinimumSize(600, 500)
         self.setWindowTitle('BitTorrent Client')
 
-        self._control.torrents_changed.connect(self._update_torrents)
+        self._control.torrent_added.connect(self._add_torrent_item)
+        self._control.torrent_changed.connect(self._update_torrent_item)
+        self._control.torrent_removed.connect(self._remove_torrent_item)
 
         self.show()
 
-    def _add_torrent(self, info: TorrentInfo):
-        download_info = info.download_info
-
-        name_label = QLabel()
-        name_label.setFont(self._name_font)
-        name_label.setText(download_info.suggested_name)  # FIXME: XSS
-
-        progress_bar = QProgressBar()
-        progress_bar.setFixedHeight(15)
-
-        stats_label = QLabel()
-        stats_label.setFont(self._stats_font)
-        stats_label.setText('Download speed 1.9 MiB/s')
-
-        vbox = QVBoxLayout()
-        vbox.addWidget(name_label)
-        vbox.addWidget(progress_bar)
-        vbox.addWidget(stats_label)
-
-        widget = QWidget()
-        widget.setLayout(vbox)
+    def _add_torrent_item(self, state: TorrentState):
+        widget = TorrentWidgetItem()
+        widget.set_state(state)
 
         item = QListWidgetItem()
         item.setIcon(self._icon)
         item.setSizeHint(widget.sizeHint())
         self._list_widget.addItem(item)
         self._list_widget.setItemWidget(item, widget)
+        self._torrent_to_item[state.info_hash] = item
 
-    def _update_torrents(self):
-        self._list_widget.clear()
+    def _update_torrent_item(self, state: TorrentState):
+        widget = self._list_widget.itemWidget(self._torrent_to_item[state.info_hash])
+        widget.set_state(state)
 
-        # FIXME: locks
-        torrents = self._control.get_torrents()
-        torrents.sort(key=lambda info: info.download_info.suggested_name)
-        for info in torrents:
-            self._add_torrent(info)
+    def _remove_torrent_item(self, info_hash: bytes):
+        row = self._list_widget.row(self._torrent_to_item[info_hash])
+        self._list_widget.takeItem(row)
+        del self._torrent_to_item[info_hash]
 
 
 class ControlManagerThread(QThread):
@@ -137,6 +182,13 @@ class ControlManagerThread(QThread):
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='A prototype of BitTorrent client (GUI)')
+    parser.add_argument('--debug', action='store_true', help='Show debug messages')
+    args = parser.parse_args()
+
+    if not args.debug:
+        logging.disable(logging.INFO)
+
     app = QApplication(sys.argv)
 
     control = ControlManager()

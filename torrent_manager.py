@@ -9,10 +9,13 @@ from math import ceil
 from typing import Dict, List, Optional, Tuple, Sequence, Iterable, cast, Iterator
 
 from file_structure import FileStructure
-from models import BlockRequestFuture, DownloadInfo, Peer, TorrentInfo
+from models import BlockRequestFuture, DownloadInfo, Peer, TorrentInfo, TorrentState
 from peer_tcp_client import PeerTCPClient
 from tracker_clients import BaseTrackerClient, create_tracker_client, EventType
-from utils import humanize_size, floor_to
+from utils import humanize_size, floor_to, import_signals
+
+
+QObject, pyqtSignal = import_signals()
 
 
 class NotEnoughPeersError(RuntimeError):
@@ -48,11 +51,16 @@ class PeerData:
         return self.is_free() and not self._client.peer_choking
 
 
-class TorrentManager:
+class TorrentManager(QObject):
+    if pyqtSignal:
+        torrent_changed = pyqtSignal(TorrentState)
+
     LOGGER_LEVEL = logging.DEBUG
     SHORT_NAME_LEN = 19
 
     def __init__(self, torrent_info: TorrentInfo, our_peer_id: bytes, server_port: Optional[int]):
+        super().__init__()
+
         self._torrent_info = torrent_info
         self._download_info = torrent_info.download_info  # type: DownloadInfo
         self._download_info.reset_run_state()
@@ -85,8 +93,10 @@ class TorrentManager:
         self._endgame_mode = False
         self._tasks_waiting_for_more_peers = 0
         self._more_peers_requested = asyncio.Event()
-        self._last_reconnect_time = 0  # type: Optional[float]
+        self._last_reconnect_time = None  # type: Optional[float]
         self._request_deque_relevant = asyncio.Event()
+
+        self._last_piece_finish_signal_time = None  # type: Optional[float]
 
         self._file_structure = FileStructure(torrent_info.download_dir, torrent_info.download_info)
 
@@ -177,6 +187,8 @@ class TorrentManager:
         self._logger.debug('piece %s started (owned by %s alive peers, concurrency: %s peers)',
                            piece_index, len(piece_info.owners), concurrent_peers_count)
 
+    PIECE_FINISH_SIGNAL_MIN_INTERVAL = 1
+
     def _finish_downloading_piece(self, piece_index: int):
         piece_info = self._download_info.pieces[piece_index]
 
@@ -196,10 +208,18 @@ class TorrentManager:
             data.client.send_have(piece_index)
 
         self._logger.debug('piece %s finished', piece_index)
-        selected_piece_count = sum(1 for info in self._download_info.pieces if info.selected)
-        progress = self._download_info.downloaded_piece_count / selected_piece_count
-        self._logger.info('progress %.1lf%% (%s / %s pieces)', floor_to(progress * 100, 1),
-                          self._download_info.downloaded_piece_count, selected_piece_count)
+
+        torrent_state = TorrentState(self._torrent_info)
+        self._logger.info('progress %.1lf%% (%s / %s pieces)', floor_to(torrent_state.progress * 100, 1),
+                          self._download_info.downloaded_piece_count, torrent_state.selected_piece_count)
+
+        if pyqtSignal and self._download_info.downloaded_piece_count < torrent_state.selected_piece_count:
+            cur_time = time.time()
+            if self._last_piece_finish_signal_time is None or \
+                    cur_time - self._last_piece_finish_signal_time >= TorrentManager.PIECE_FINISH_SIGNAL_MIN_INTERVAL:
+                self.torrent_changed.emit(torrent_state)
+                self._last_piece_finish_signal_time = time.time()
+            # If the signal isn't emitted, the GUI will be updated after the next speed measurement anyway
 
     async def _validate_piece(self, piece_index: int):
         piece_info = self._download_info.pieces[piece_index]
@@ -549,6 +569,9 @@ class TorrentManager:
         await self._try_to_announce(EventType.completed)
         self._logger.info('file download complete')
 
+        if pyqtSignal:
+            self.torrent_changed.emit(TorrentState(self._torrent_info))
+
         # for peer, data in self._peer_data.items():
         #     if data.client.is_seed():
         #         self._client_executors[peer].cancel()
@@ -640,6 +663,9 @@ class TorrentManager:
             if len(downloaded_queue) > max_queue_length:
                 downloaded_queue.popleft()
                 uploaded_queue.popleft()
+
+            if pyqtSignal:
+                self.torrent_changed.emit(TorrentState(self._torrent_info))
 
             await asyncio.sleep(TorrentManager.SPEED_UPDATE_TIMEOUT)
         return downloaded_queue
