@@ -2,19 +2,25 @@ import asyncio
 import copy
 import logging
 import pickle
-from typing import Dict, Iterable
+from typing import Dict, List
 
 from models import generate_peer_id, TorrentInfo
 from peer_tcp_server import PeerTCPServer
 from torrent_manager import TorrentManager
+from utils import import_signals
+
+
+QObject, pyqtSignal = import_signals()
 
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
-class ControlManager:
+class ControlManager(QObject):
     def __init__(self):
+        super().__init__()
+
         self._our_peer_id = generate_peer_id()
 
         self._torrents = {}          # type: Dict[bytes, TorrentInfo]
@@ -24,8 +30,8 @@ class ControlManager:
 
         self._torrent_manager_executors = {}  # type: Dict[bytes, asyncio.Task]
 
-    def get_torrents(self) -> Iterable[TorrentInfo]:
-        return self._torrents.values()
+    def get_torrents(self) -> List[TorrentInfo]:
+        return list(self._torrents.values())
 
     async def start(self):
         await self._server.start()
@@ -37,6 +43,12 @@ class ControlManager:
         self._torrent_managers[info_hash] = manager
         self._torrent_manager_executors[info_hash] = asyncio.ensure_future(manager.run())
 
+    if pyqtSignal:
+        torrents_changed = pyqtSignal()
+        # torrent_added, torrent_changed, torrent_removed
+        # Information message should be formed in ControlManager thread and then
+        # transferred as strings to avoid lock problems
+
     def add(self, torrent_info: TorrentInfo):
         info_hash = torrent_info.download_info.info_hash
         if info_hash in self._torrents:
@@ -45,6 +57,9 @@ class ControlManager:
         if not torrent_info.paused:
             self._start_torrent_manager(torrent_info)
         self._torrents[info_hash] = torrent_info
+
+        if pyqtSignal:
+            self.torrents_changed.emit()
 
     def resume(self, info_hash: bytes):
         if info_hash not in self._torrents:

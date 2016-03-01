@@ -13,7 +13,7 @@ import torrent_formatters
 from control_client import ControlClient
 from control_manager import ControlManager
 from control_server import ControlServer, DaemonExit
-from models import TorrentInfo
+from models import TorrentInfo, TorrentState
 
 
 logging.basicConfig(format='%(levelname)s %(asctime)s %(name)-23s %(message)s', datefmt='%H:%M:%S')
@@ -112,23 +112,23 @@ async def control_action_handler(args):
             await client.execute(partial(action, info_hash=info.download_info.info_hash))
 
 
-def status_server_handler(manager: ControlManager, long_format: bool) -> str:
-    torrents = list(manager.get_torrents())
+def status_server_handler(manager: ControlManager) -> str:
+    torrents = manager.get_torrents()
     if not torrents:
         return 'No torrents added'
 
     torrents.sort(key=lambda info: info.download_info.suggested_name)
-    return '\n'.join(
-        torrent_formatters.join_lines(
-            torrent_formatters.format_title(info, long_format) + torrent_formatters.format_status(info, long_format))
-        for info in torrents).rstrip()
+    return [TorrentState(torrent_info) for torrent_info in torrents]
 
 
 async def status_handler(args):
     async with ControlClient() as client:
-        status_text = await client.execute(partial(status_server_handler, long_format=args.verbose))
+        torrent_states = await client.execute(status_server_handler)
 
-    print(status_text)
+    paragraphs = [torrent_formatters.join_lines(torrent_formatters.format_title(state, args.verbose) +
+                                                torrent_formatters.format_status(state, args.verbose))
+                  for state in torrent_states]
+    print('\n'.join(paragraphs).rstrip())
 
 
 def stop_server_handler(_: ControlManager):

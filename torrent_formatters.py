@@ -1,7 +1,7 @@
 from math import floor
-from typing import Iterable, List
+from typing import Iterable, List, Union
 
-from models import DownloadInfo, TorrentInfo
+from models import DownloadInfo, TorrentInfo, TorrentState
 from utils import humanize_size, humanize_speed, floor_to, humanize_time
 
 
@@ -14,11 +14,10 @@ def join_lines(lines: Iterable[str]) -> str:
     return ''.join(line[:-1].ljust(COLUMN_WIDTH) if line.endswith('\t') else line for line in lines)
 
 
-def format_title(torrent_info: TorrentInfo, long_format: bool) -> List[str]:
-    download_info = torrent_info.download_info  # type: DownloadInfo
-    lines = ['Name: {}\n'.format(download_info.suggested_name)]
+def format_title(info: Union[DownloadInfo, TorrentState], long_format: bool) -> List[str]:
+    lines = ['Name: {}\n'.format(info.suggested_name)]
     if long_format:
-        lines.append('ID: {}\n'.format(download_info.info_hash.hex()))
+        lines.append('ID: {}\n'.format(info.info_hash.hex()))
     return lines
 
 
@@ -43,54 +42,37 @@ def format_content(torrent_info: TorrentInfo) -> List[str]:
 MIN_SPEED_TO_SHOW_ETA = 100 * 2 ** 10  # bytes/s
 
 
-def format_status(torrent_info: TorrentInfo, long_format: bool) -> List[str]:
-    download_info = torrent_info.download_info  # type: DownloadInfo
-    statistics = download_info.session_statistics
+def format_status(state: TorrentState, long_format: bool) -> List[str]:
     lines = []
 
-    selected_piece_count = sum(1 for info in download_info.pieces if info.selected)
-    last_piece_info = download_info.pieces[-1]
-    downloaded_size = download_info.downloaded_piece_count * download_info.piece_length
-    if last_piece_info.downloaded:
-        downloaded_size += last_piece_info.length - download_info.piece_length
-    selected_size = selected_piece_count * download_info.piece_length
-    if last_piece_info.selected:
-        selected_size += last_piece_info.length - download_info.piece_length
-
     if long_format:
-        selected_files_count = sum(1 for info in download_info.files if info.selected)
         lines.append('Selected: {}/{} files ({}/{} pieces)\n'.format(
-            selected_files_count, len(download_info.files), selected_piece_count, download_info.piece_count))
-        lines.append('Directory: {}\n'.format(torrent_info.download_dir))
+            state.selected_file_count, state.total_file_count, state.selected_piece_count, state.total_piece_count))
+        lines.append('Directory: {}\n'.format(state.download_dir))
 
-        if torrent_info.paused:
-            state = 'Paused\n'
-        elif download_info.complete:
-            state = 'Uploading\n'
+        if state.paused:
+            general_status = 'Paused\n'
+        elif state.complete:
+            general_status = 'Uploading\n'
         else:
-            state = 'Downloading\t'
-        lines.append('State: ' + state)
-        if not torrent_info.paused and not download_info.complete:
-            if statistics.download_speed is not None and statistics.download_speed >= MIN_SPEED_TO_SHOW_ETA:
-                eta_seconds = (selected_size - downloaded_size) / statistics.download_speed
-                eta_repr = humanize_time(eta_seconds)
-            else:
-                eta_repr = 'unknown'
-            lines.append('ETA: {}\n'.format(eta_repr))
+            general_status = 'Downloading\t'
+        lines.append('State: ' + general_status)
+        if not state.paused and not state.complete:
+            eta_seconds = state.eta_seconds
+            lines.append('ETA: {}\n'.format(humanize_time(eta_seconds) if eta_seconds is not None else 'unknown'))
 
-        lines.append('Download from: {}/{} peers\t'.format(statistics.downloading_peer_count, statistics.peer_count))
-        lines.append('Upload to: {}/{} peers\n'.format(statistics.uploading_peer_count, statistics.peer_count))
+        lines.append('Download from: {}/{} peers\t'.format(state.downloading_peer_count, state.total_peer_count))
+        lines.append('Upload to: {}/{} peers\n'.format(state.uploading_peer_count, state.total_peer_count))
 
     lines.append('Download speed: {}\t'.format(
-        humanize_speed(statistics.download_speed) if statistics.download_speed is not None else 'unknown'))
+        humanize_speed(state.download_speed) if state.download_speed is not None else 'unknown'))
     lines.append('Upload speed: {}\n'.format(
-        humanize_speed(statistics.upload_speed) if statistics.upload_speed is not None else 'unknown'))
+        humanize_speed(state.upload_speed) if state.upload_speed is not None else 'unknown'))
 
-    lines.append('Size: {}/{}\t'.format(humanize_size(downloaded_size), humanize_size(selected_size)))
-    ratio = statistics.total_uploaded / statistics.total_downloaded if statistics.total_downloaded else 0
-    lines.append('Ratio: {:.1f}\n'.format(ratio))
+    lines.append('Size: {}/{}\t'.format(humanize_size(state.downloaded_size), humanize_size(state.selected_size)))
+    lines.append('Ratio: {:.1f}\n'.format(state.ratio))
 
-    progress = downloaded_size / selected_size
+    progress = state.progress
     progress_bar = ('#' * floor(progress * PROGRESS_BAR_WIDTH)).ljust(PROGRESS_BAR_WIDTH)
     lines.append('Progress: {:5.1f}% [{}]\n'.format(floor_to(progress * 100, 1), progress_bar))
 

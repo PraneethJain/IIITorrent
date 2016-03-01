@@ -7,7 +7,7 @@ import struct
 import time
 from collections import OrderedDict
 from math import ceil
-from typing import List, Set, cast, Optional, Dict, Union, Any, Iterator, Tuple
+from typing import List, Set, cast, Optional, Dict, Union, Any, Iterator
 
 import bencodepy
 from bitarray import bitarray
@@ -508,3 +508,63 @@ class TorrentInfo:
     @property
     def announce_list(self) -> List[List[str]]:
         return self._announce_list
+
+
+class TorrentState:
+    """This class represents crucial parameters of torrent state. Unlike TorrentInfo and DownloadInfo,
+    it is too small to serialize (to send it via socket as an answer to `status` command) and
+    thread-safe (we can pass it to a GUI thread).
+    """
+
+    def __init__(self, torrent_info: TorrentInfo):
+        download_info = torrent_info.download_info
+        statistics = download_info.session_statistics
+
+        self.suggested_name = download_info.suggested_name
+        self.info_hash = download_info.info_hash
+
+        self.total_piece_count = len(download_info.pieces)
+        self.selected_piece_count = sum(1 for info in download_info.pieces if info.selected)
+
+        last_piece_info = download_info.pieces[-1]
+        self.selected_size = self.selected_piece_count * download_info.piece_length
+        if last_piece_info.selected:
+            self.selected_size += last_piece_info.length - download_info.piece_length
+        self.downloaded_size = download_info.downloaded_piece_count * download_info.piece_length
+        if last_piece_info.downloaded:
+            self.downloaded_size += last_piece_info.length - download_info.piece_length
+
+        self.total_file_count = len(download_info.files)
+        self.selected_file_count = sum(1 for info in download_info.files if info.selected)
+
+        self.download_dir = torrent_info.download_dir
+
+        self.paused = torrent_info.paused
+        self.complete = download_info.complete
+
+        self.total_peer_count = statistics.peer_count
+        self.downloading_peer_count = statistics.downloading_peer_count
+        self.uploading_peer_count = statistics.uploading_peer_count
+
+        self.download_speed = statistics.download_speed
+        self.upload_speed = statistics.upload_speed
+
+        self.total_uploaded = statistics.total_uploaded
+        self.total_downloaded = statistics.total_downloaded
+
+    MIN_SPEED_TO_CALC_ETA = 100 * 2 ** 10  # = 100 KiB/s
+
+    @property
+    def eta_seconds(self) -> Optional[int]:
+        if self.download_speed is not None and self.download_speed >= TorrentState.MIN_SPEED_TO_CALC_ETA:
+            return (self.selected_size - self.downloaded_size) / self.download_speed
+        else:
+            return None
+
+    @property
+    def ratio(self) -> float:
+        return self.total_uploaded / self.total_downloaded if self.total_downloaded else 0
+
+    @property
+    def progress(self) -> float:
+        return self.downloaded_size / self.selected_size

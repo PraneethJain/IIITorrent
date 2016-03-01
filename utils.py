@@ -1,5 +1,6 @@
 from math import floor, log
-from typing import List, TypeVar, Sequence
+from typing import List, TypeVar, Sequence, cast, Callable
+from typing import Optional
 
 
 T = TypeVar('T', Sequence, memoryview)
@@ -47,3 +48,12 @@ def humanize_time(total_seconds: int) -> str:
 def floor_to(x: float, ndigits: int) -> float:
     scale = 10 ** ndigits
     return floor(x * scale) / scale
+
+
+def import_signals():
+    try:
+        from PyQt5.QtCore import QObject, pyqtSignal
+
+        return QObject, pyqtSignal
+    except ImportError:
+        return object, None
