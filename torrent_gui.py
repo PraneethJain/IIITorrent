@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 from contextlib import closing
+from functools import partial
 from math import floor
 from typing import Dict
 
@@ -59,7 +60,16 @@ class TorrentWidgetItem(QWidget):
 
         self.setLayout(vbox)
 
-    def set_state(self, state: TorrentState):
+        self._state = None
+
+    @property
+    def state(self) -> TorrentState:
+        return self._state
+
+    @state.setter
+    def state(self, state: TorrentState):
+        self._state = state
+
         self._name_label.setText(state.suggested_name)  # FIXME: XSS
 
         if state.downloaded_size < state.selected_size:
@@ -89,10 +99,11 @@ class TorrentWidgetItem(QWidget):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, control: ControlManager):
+    def __init__(self, control_thread: 'ControlManagerThread'):
         super().__init__()
 
-        self._control = control
+        self._control_thread = control_thread
+        self._control = control_thread.control
 
         self._icon = QIcon('exit24x24.png')
 
@@ -100,12 +111,20 @@ class MainWindow(QMainWindow):
         toolbar.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         toolbar.setMovable(False)
         toolbar.addAction(self._icon, 'Open')
-        toolbar.addAction(self._icon, 'Pause')
-        toolbar.addAction(self._icon, 'Resume')
-        toolbar.addAction(self._icon, 'Remove')
+        self._pause_action = toolbar.addAction(self._icon, 'Pause')
+        self._pause_action.setEnabled(False)
+        self._pause_action.triggered.connect(partial(self._control_action_triggered, self._control.pause))
+        self._resume_action = toolbar.addAction(self._icon, 'Resume')
+        self._resume_action.setEnabled(False)
+        self._resume_action.triggered.connect(partial(self._control_action_triggered, self._control.resume))
+        self._remove_action = toolbar.addAction(self._icon, 'Remove')
+        self._remove_action.setEnabled(False)
+        self._remove_action.triggered.connect(partial(self._control_action_triggered, self._control.remove))
 
         self._list_widget = QListWidget()
+        self._list_widget.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self._list_widget.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self._list_widget.itemSelectionChanged.connect(self._update_control_action_state)
         self._torrent_to_item = {}  # type: Dict[bytes, QListWidgetItem]
 
         self.setCentralWidget(self._list_widget)
@@ -121,23 +140,53 @@ class MainWindow(QMainWindow):
 
     def _add_torrent_item(self, state: TorrentState):
         widget = TorrentWidgetItem()
-        widget.set_state(state)
+        widget.state = state
 
         item = QListWidgetItem()
         item.setIcon(self._icon)
         item.setSizeHint(widget.sizeHint())
+        item.setData(Qt.UserRole, state.info_hash)
         self._list_widget.addItem(item)
         self._list_widget.setItemWidget(item, widget)
         self._torrent_to_item[state.info_hash] = item
 
     def _update_torrent_item(self, state: TorrentState):
         widget = self._list_widget.itemWidget(self._torrent_to_item[state.info_hash])
-        widget.set_state(state)
+        widget.state = state
+
+        self._update_control_action_state()
 
     def _remove_torrent_item(self, info_hash: bytes):
-        row = self._list_widget.row(self._torrent_to_item[info_hash])
-        self._list_widget.takeItem(row)
+        item = self._torrent_to_item[info_hash]
+        self._list_widget.takeItem(self._list_widget.row(item))
         del self._torrent_to_item[info_hash]
+
+        self._update_control_action_state()
+
+    def _update_control_action_state(self):
+        self._pause_action.setEnabled(False)
+        self._resume_action.setEnabled(False)
+        self._remove_action.setEnabled(False)
+        for item in self._list_widget.selectedItems():
+            state = self._list_widget.itemWidget(item).state
+            if state.paused:
+                self._resume_action.setEnabled(True)
+            else:
+                self._pause_action.setEnabled(True)
+            self._remove_action.setEnabled(True)
+
+    async def _invoke_control_action(self, action, info_hash: bytes):
+        try:
+            result = action(info_hash)
+            if asyncio.iscoroutine(result):
+                await result
+        except ValueError:
+            pass
+
+    def _control_action_triggered(self, action):
+        for item in self._list_widget.selectedItems():
+            info_hash = item.data(Qt.UserRole)
+            asyncio.run_coroutine_threadsafe(self._invoke_control_action(action, info_hash), self._control_thread.loop)
 
 
 class ControlManagerThread(QThread):
@@ -147,6 +196,14 @@ class ControlManagerThread(QThread):
         self._loop = None  # type: asyncio.AbstractEventLoop
         self._control = control
         self._stopping = False
+
+    @property
+    def loop(self) -> asyncio.AbstractEventLoop:
+        return self._loop
+
+    @property
+    def control(self) -> ControlManager:
+        return self._control
 
     def _load_state(self):
         if os.path.isfile(STATE_FILENAME):
@@ -196,5 +253,5 @@ if __name__ == '__main__':
     control_thread.start()
 
     app.lastWindowClosed.connect(control_thread.stop)
-    main_window = MainWindow(control)
+    main_window = MainWindow(control_thread)
     sys.exit(app.exec_())
