@@ -75,11 +75,12 @@ class TorrentAddingDialog(QDialog):
         return widget
 
     def _browse(self):
-        new_download_dir = QFileDialog.getExistingDirectory(self, 'Select download directory', self._download_dir)
+        new_download_dir = QFileDialog.getExistingDirectory(self, 'Select download directory',
+                                                            self._selected_download_dir)
         if not new_download_dir:
             return
 
-        self._download_dir = new_download_dir
+        self._selected_download_dir = new_download_dir
         self._path_edit.setText(new_download_dir)
 
     def __init__(self, parent: QWidget, filename: str, torrent_info: TorrentInfo,
@@ -92,7 +93,7 @@ class TorrentAddingDialog(QDialog):
         vbox = QVBoxLayout(self)
 
         vbox.addWidget(QLabel('Download directory:'))
-        self._download_dir = os.getcwd()
+        self._selected_download_dir = os.getcwd()
         vbox.addWidget(self._get_directory_browse_widget())
 
         vbox.addWidget(QLabel('Announce URLs:'))
@@ -193,6 +194,8 @@ class TorrentAddingDialog(QDialog):
                 selected_file_count, humanize_size(selected_size)))
 
     def submit_torrent(self):
+        self._torrent_info.download_dir = self._selected_download_dir
+
         file_paths = []
         for node, item in self._file_items:
             if item.checkState(0) == Qt.Checked:
@@ -368,7 +371,7 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            torrent_info = TorrentInfo.from_file(filename, download_dir=os.path.curdir)
+            torrent_info = TorrentInfo.from_file(filename, download_dir=None)
 
             if torrent_info.download_info.info_hash in self._torrent_to_item:
                 raise ValueError('This torrent is already added')
