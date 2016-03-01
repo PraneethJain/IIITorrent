@@ -44,6 +44,8 @@ directory_icon = load_icon('directory')
 class TorrentAddingDialog(QDialog):
     SELECTION_LABEL_FORMAT = 'Selected {} files ({})'
 
+    selected_download_dir = os.getcwd()
+
     def _traverse_file_tree(self, name: str, node: FileTreeNode, parent: QWidget):
         item = QTreeWidgetItem(parent)
         item.setCheckState(0, Qt.Checked)
@@ -63,7 +65,7 @@ class TorrentAddingDialog(QDialog):
         hbox = QHBoxLayout(widget)
         hbox.setContentsMargins(0, 0, 0, 0)
 
-        self._path_edit = QLineEdit(os.getcwd())
+        self._path_edit = QLineEdit(TorrentAddingDialog.selected_download_dir)
         self._path_edit.setReadOnly(True)
         hbox.addWidget(self._path_edit, 3)
 
@@ -76,11 +78,11 @@ class TorrentAddingDialog(QDialog):
 
     def _browse(self):
         new_download_dir = QFileDialog.getExistingDirectory(self, 'Select download directory',
-                                                            self._selected_download_dir)
+                                                            TorrentAddingDialog.selected_download_dir)
         if not new_download_dir:
             return
 
-        self._selected_download_dir = new_download_dir
+        TorrentAddingDialog.selected_download_dir = new_download_dir
         self._path_edit.setText(new_download_dir)
 
     def __init__(self, parent: QWidget, filename: str, torrent_info: TorrentInfo,
@@ -93,7 +95,6 @@ class TorrentAddingDialog(QDialog):
         vbox = QVBoxLayout(self)
 
         vbox.addWidget(QLabel('Download directory:'))
-        self._selected_download_dir = os.getcwd()
         vbox.addWidget(self._get_directory_browse_widget())
 
         vbox.addWidget(QLabel('Announce URLs:'))
@@ -194,7 +195,7 @@ class TorrentAddingDialog(QDialog):
                 selected_file_count, humanize_size(selected_size)))
 
     def submit_torrent(self):
-        self._torrent_info.download_dir = self._selected_download_dir
+        self._torrent_info.download_dir = TorrentAddingDialog.selected_download_dir
 
         file_paths = []
         for node, item in self._file_items:
