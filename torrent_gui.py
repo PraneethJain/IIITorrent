@@ -16,10 +16,11 @@ from PyQt5.QtCore import Qt, QThread
 from PyQt5.QtGui import QIcon, QFont
 # noinspection PyUnresolvedReferences
 from PyQt5.QtWidgets import QWidget, QListWidget, QAbstractItemView, QLabel, QVBoxLayout, QProgressBar, \
-    QListWidgetItem, QMainWindow, QApplication, QFileDialog, QMessageBox
+    QListWidgetItem, QMainWindow, QApplication, QFileDialog, QMessageBox, QDialog, QDialogButtonBox, QTreeWidget, \
+    QTreeWidgetItem, QHeaderView, QHBoxLayout, QPushButton, QLineEdit
 
 from control_manager import ControlManager
-from models import TorrentState, TorrentInfo
+from models import TorrentState, TorrentInfo, FileTreeNode, FileInfo
 from utils import humanize_speed, humanize_time, humanize_size
 
 
@@ -27,6 +28,167 @@ logging.basicConfig(format='%(levelname)s %(asctime)s %(name)-23s %(message)s', 
 
 
 STATE_FILENAME = 'state.bin'
+
+
+class TorrentAddingDialog(QDialog):
+    SELECTION_LABEL_FORMAT = 'Selected {} files ({})'
+
+    def _traverse_file_tree(self, name: str, node: FileTreeNode, parent: QWidget):
+        item = QTreeWidgetItem(parent)
+        item.setCheckState(0, Qt.Checked)
+        item.setText(0, name)
+        if isinstance(node, FileInfo):
+            item.setText(1, humanize_size(node.length))
+            self._file_items.append((node, item))
+            return
+        for name, child in node.items():
+            self._traverse_file_tree(name, child, item)
+
+    def _get_directory_browse_widget(self):
+        widget = QWidget()
+        hbox = QHBoxLayout(widget)
+        hbox.setContentsMargins(0, 0, 0, 0)
+
+        self._path_edit = QLineEdit(os.getcwd())
+        self._path_edit.setReadOnly(True)
+        hbox.addWidget(self._path_edit, 3)
+
+        browse_button = QPushButton('Browse...')
+        browse_button.clicked.connect(self._browse)
+        hbox.addWidget(browse_button, 1)
+
+        widget.setLayout(hbox)
+        return widget
+
+    def _browse(self):
+        new_download_dir = QFileDialog.getExistingDirectory(self, 'Select download directory', self._download_dir)
+        if not new_download_dir:
+            return
+
+        self._download_dir = new_download_dir
+        self._path_edit.setText(new_download_dir)
+
+    def __init__(self, parent: QWidget, filename: str, torrent_info: TorrentInfo,
+                 control_thread: 'ControlManagerThread'):
+        super().__init__(parent)
+        self._torrent_info = torrent_info
+        download_info = torrent_info.download_info
+        self._control_thread = control_thread
+
+        vbox = QVBoxLayout(self)
+
+        vbox.addWidget(QLabel('Download directory:'))
+        self._download_dir = os.getcwd()
+        vbox.addWidget(self._get_directory_browse_widget())
+
+        vbox.addWidget(QLabel('Announce URLs:'))
+
+        url_tree = QTreeWidget()
+        url_tree.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        url_tree.header().close()
+        vbox.addWidget(url_tree)
+        for i, tier in enumerate(torrent_info.announce_list):
+            tier_item = QTreeWidgetItem(url_tree)
+            tier_item.setText(0, 'Tier {}'.format(i + 1))
+            for url in tier:
+                url_item = QTreeWidgetItem(tier_item)
+                url_item.setText(0, url)
+        url_tree.expandAll()
+        vbox.addWidget(url_tree, 1)
+
+        file_tree = QTreeWidget()
+        file_tree.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        file_tree.setHeaderLabels(('Name', 'Size'))
+        file_tree.header().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self._file_items = []
+        self._traverse_file_tree(download_info.suggested_name, download_info.file_tree, file_tree)
+        file_tree.sortItems(0, Qt.AscendingOrder)
+        file_tree.expandAll()
+        file_tree.itemClicked.connect(self._update_checkboxes)
+        vbox.addWidget(file_tree, 3)
+
+        self._selection_label = QLabel(TorrentAddingDialog.SELECTION_LABEL_FORMAT.format(
+            len(download_info.files), humanize_size(download_info.total_size)))
+        vbox.addWidget(self._selection_label)
+
+        self._button_box = QDialogButtonBox(self)
+        self._button_box.setOrientation(Qt.Horizontal)
+        self._button_box.setStandardButtons(QDialogButtonBox.Cancel | QDialogButtonBox.Ok)
+        self._button_box.button(QDialogButtonBox.Ok).clicked.connect(self.submit_torrent)
+        self._button_box.button(QDialogButtonBox.Cancel).clicked.connect(self.close)
+        vbox.addWidget(self._button_box)
+
+        self.setFixedSize(450, 550)
+        self.setWindowTitle('Adding "{}"'.format(filename))
+
+    def _set_check_state_to_tree(self, item: QTreeWidgetItem, check_state: Qt.CheckState):
+        for i in range(item.childCount()):
+            child = item.child(i)
+            child.setCheckState(0, check_state)
+            self._set_check_state_to_tree(child, check_state)
+
+    def _update_checkboxes(self, item: QTreeWidgetItem, column: int):
+        if column != 0:
+            return
+
+        new_check_state = item.checkState(0)
+        self._set_check_state_to_tree(item, new_check_state)
+
+        while True:
+            item = item.parent()
+            if item is None:
+                break
+
+            has_checked_children = False
+            has_partially_checked_children = False
+            has_unchecked_children = False
+            for i in range(item.childCount()):
+                state = item.child(i).checkState(0)
+                if state == Qt.Checked:
+                    has_checked_children = True
+                elif state == Qt.PartiallyChecked:
+                    has_partially_checked_children = True
+                else:
+                    has_unchecked_children = True
+
+            if not has_partially_checked_children and not has_unchecked_children:
+                new_state = Qt.Checked
+            elif has_checked_children or has_partially_checked_children:
+                new_state = Qt.PartiallyChecked
+            else:
+                new_state = Qt.Unchecked
+            item.setCheckState(0, new_state)
+
+        self._update_selection_label()
+
+    def _update_selection_label(self):
+        selected_file_count = 0
+        selected_size = 0
+        for node, item in self._file_items:
+            if item.checkState(0) == Qt.Checked:
+                selected_file_count += 1
+                selected_size += node.length
+
+        ok_button = self._button_box.button(QDialogButtonBox.Ok)
+        if not selected_file_count:
+            ok_button.setEnabled(False)
+            self._selection_label.setText('Nothing to download')
+        else:
+            ok_button.setEnabled(True)
+            self._selection_label.setText(TorrentAddingDialog.SELECTION_LABEL_FORMAT.format(
+                selected_file_count, humanize_size(selected_size)))
+
+    def submit_torrent(self):
+        file_paths = []
+        for node, item in self._file_items:
+            if item.checkState(0) == Qt.Checked:
+                file_paths.append(node.path)
+        if not self._torrent_info.download_info.single_file_mode:
+            self._torrent_info.download_info.select_files(file_paths, 'whitelist')
+
+        self._control_thread.loop.call_soon_threadsafe(self._control_thread.control.add, self._torrent_info)
+
+        self.close()
 
 
 class TorrentWidgetItem(QWidget):
@@ -38,27 +200,24 @@ class TorrentWidgetItem(QWidget):
 
     def __init__(self):
         super().__init__()
+        vbox = QVBoxLayout(self)
 
         self._name_label = QLabel()
         self._name_label.setFont(TorrentWidgetItem._name_font)
+        vbox.addWidget(self._name_label)
 
         self._upper_status_label = QLabel()
         self._upper_status_label.setFont(TorrentWidgetItem._stats_font)
+        vbox.addWidget(self._upper_status_label)
 
         self._progress_bar = QProgressBar()
         self._progress_bar.setFixedHeight(15)
         self._progress_bar.setMaximum(1000)
+        vbox.addWidget(self._progress_bar)
 
         self._lower_status_label = QLabel()
         self._lower_status_label.setFont(TorrentWidgetItem._stats_font)
-
-        vbox = QVBoxLayout()
-        vbox.addWidget(self._name_label)
-        vbox.addWidget(self._upper_status_label)
-        vbox.addWidget(self._progress_bar)
         vbox.addWidget(self._lower_status_label)
-
-        self.setLayout(vbox)
 
         self._state = None
 
@@ -70,7 +229,7 @@ class TorrentWidgetItem(QWidget):
     def state(self, state: TorrentState):
         self._state = state
 
-        self._name_label.setText(state.suggested_name)  # FIXME: XSS
+        self._name_label.setText(state.suggested_name)  # FIXME: Avoid XSS in all setText calls
 
         if state.downloaded_size < state.selected_size:
             status_text = '{} of {}'.format(humanize_size(state.downloaded_size), humanize_size(state.selected_size))
@@ -103,7 +262,7 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self._control_thread = control_thread
-        self._control = control_thread.control
+        control = control_thread.control
 
         self._icon = QIcon('exit24x24.png')
 
@@ -114,13 +273,13 @@ class MainWindow(QMainWindow):
         self._add_action.triggered.connect(self._add_torrent_triggered)
         self._pause_action = toolbar.addAction(self._icon, 'Pause')
         self._pause_action.setEnabled(False)
-        self._pause_action.triggered.connect(partial(self._control_action_triggered, self._control.pause))
+        self._pause_action.triggered.connect(partial(self._control_action_triggered, control.pause))
         self._resume_action = toolbar.addAction(self._icon, 'Resume')
         self._resume_action.setEnabled(False)
-        self._resume_action.triggered.connect(partial(self._control_action_triggered, self._control.resume))
+        self._resume_action.triggered.connect(partial(self._control_action_triggered, control.resume))
         self._remove_action = toolbar.addAction(self._icon, 'Remove')
         self._remove_action.setEnabled(False)
-        self._remove_action.triggered.connect(partial(self._control_action_triggered, self._control.remove))
+        self._remove_action.triggered.connect(partial(self._control_action_triggered, control.remove))
 
         self._list_widget = QListWidget()
         self._list_widget.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -133,9 +292,9 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(600, 500)
         self.setWindowTitle('BitTorrent Client')
 
-        self._control.torrent_added.connect(self._add_torrent_item)
-        self._control.torrent_changed.connect(self._update_torrent_item)
-        self._control.torrent_removed.connect(self._remove_torrent_item)
+        control.torrent_added.connect(self._add_torrent_item)
+        control.torrent_changed.connect(self._update_torrent_item)
+        control.torrent_removed.connect(self._remove_torrent_item)
 
         self.show()
 
@@ -191,11 +350,14 @@ class MainWindow(QMainWindow):
 
         try:
             torrent_info = TorrentInfo.from_file(filename, download_dir=os.path.curdir)
+
+            if torrent_info.download_info.info_hash in self._torrent_to_item:
+                raise ValueError('This torrent is already added')
         except Exception as err:
             QMessageBox.critical(self, 'Failed to add torrent', str(err))
             return
 
-        self._control_thread.loop.call_soon_threadsafe(self._control.add, torrent_info)
+        TorrentAddingDialog(self, filename, torrent_info, self._control_thread).exec()
 
     async def _invoke_control_action(self, action, info_hash: bytes):
         try:
@@ -276,7 +438,7 @@ def main():
 
     app.lastWindowClosed.connect(control_thread.stop)
     main_window = MainWindow(control_thread)
-    return app.exec_()
+    return app.exec()
 
 
 if __name__ == '__main__':

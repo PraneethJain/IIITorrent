@@ -9,6 +9,7 @@ Requirements
 * Python 3.5
 * Modules `aiohttp` and `bitarray`
 * Module `bencodepy` (will not be required in the future)
+* PyQt5 (only for GUI)
 
 To install binary packages with the required Python version on Ubuntu you can use
 [fkrull/deadsnakes](https://launchpad.net/~fkrull/+archive/ubuntu/deadsnakes) repository that contains various
@@ -22,8 +23,17 @@ To install necessary modules run:
 
     $ sudo python3.5 -m pip install aiohttp bitarray bencodepy
 
-Usage
------
+GUI Usage
+---------
+
+Run:
+
+    $ python3.5 torrent_gui.py
+
+Add `--debug` to enable debug mode.
+
+CLI Usage
+---------
 
 1. Run a daemon in a separate terminal:
 

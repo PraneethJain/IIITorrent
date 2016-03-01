@@ -327,6 +327,10 @@ class DownloadInfo:
 
         self._session_statistics = SessionStatistics(None)
 
+    @property
+    def single_file_mode(self) -> bool:
+        return len(self.files) == 1 and not self.files[0].path
+
     def _create_file_tree(self):
         offset = 0
         for item in self.files:
@@ -340,6 +344,10 @@ class DownloadInfo:
                 for elem in item.path[:-1]:
                     directory = directory.setdefault(elem, {})
                 directory[item.path[-1]] = item
+
+    @property
+    def file_tree(self) -> FileTreeNode:
+        return self._file_tree
 
     def _get_file_tree_node(self, path: List[str]) -> FileTreeNode:
         result = self._file_tree
@@ -362,9 +370,6 @@ class DownloadInfo:
         if mode not in ('whitelist', 'blacklist'):
             raise ValueError('Invalid mode "{}"'.format(mode))
         include_paths = (mode == 'whitelist')
-
-        if len(self.files) == 1 and not self.files[0].path:
-            raise ValueError("Can't select files in a single-file torrent")
 
         for info in self.pieces:
             info.selected = not include_paths

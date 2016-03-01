@@ -510,7 +510,7 @@ class TorrentManager(QObject):
                     except asyncio.CancelledError:
                         raise
                     except Exception as e:
-                        self._logger.warning('announce to "%s" failed: %r', url, e)
+                        self._logger.info('announce to "%s" failed: %r', url, e)
                     else:
                         peer_count = len(client.peers) if client.peers else 'no'
                         self._logger.debug('announce to "%s" succeed (%s peers, interval = %s, min_interval = %s)',

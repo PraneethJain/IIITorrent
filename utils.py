@@ -20,7 +20,7 @@ def humanize_size(size: float) -> str:
     if not size:
         return 'None'
     if size < UNIT_BASE:
-        return '{:.0f} B'.format(size)
+        return '{:.0f} bytes'.format(size)
     unit = floor(log(size, UNIT_BASE))
     unit_name = UNIT_PREFIXES[min(unit, len(UNIT_PREFIXES)) - 1] + 'iB'
     return '{:.1f} {}'.format(size / UNIT_BASE ** unit, unit_name)

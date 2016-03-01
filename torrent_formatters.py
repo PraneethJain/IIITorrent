@@ -28,9 +28,8 @@ def format_content(torrent_info: TorrentInfo) -> List[str]:
     for i, tier in enumerate(torrent_info.announce_list):
         lines.append(INDENT + 'Tier {}: {}\n'.format(i + 1, ', '.join(tier)))
 
-    single_file_mode = (len(download_info.files) == 1 and not download_info.files[0].path)
     total_size_repr = humanize_size(download_info.total_size)
-    if single_file_mode:
+    if download_info.single_file_mode:
         lines.append('Content: single file ({})\n'.format(total_size_repr))
     else:
         lines.append('Content: {} files (total {})\n'.format(len(download_info.files), total_size_repr))

@@ -93,6 +93,8 @@ async def add_handler(args):
         if len(torrents) > 1:
             raise ValueError('Can\'t handle "--include" and "--exclude" when several files are added')
         torrent_info = torrents[0]
+        if torrent_info.download_info.single_file_mode:
+            raise ValueError("Can't select files in a single-file torrent")
 
         paths = [PATH_SPLIT_RE.split(path) for path in paths]
         torrent_info.download_info.select_files(paths, mode)
