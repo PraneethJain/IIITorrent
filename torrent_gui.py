@@ -395,9 +395,10 @@ class MainWindow(QMainWindow):
             asyncio.run_coroutine_threadsafe(self._invoke_control_action(action, info_hash), self._control_thread.loop)
 
     def _show_about(self):
-        QMessageBox.about(self, 'About', 'Prototype of BitTorrent client\n'
-                                         'Copyright (c) 2016 Alexander Borzunov\n'
-                                         'Icons made by Google and Freepik from www.flaticon.com')
+        QMessageBox.about(self, 'About', '<p><b>Prototype of BitTorrent client</b></p>'
+                                         '<p>Copyright (c) 2016 Alexander Borzunov</p>'
+                                         '<p>Icons made by Google and Freepik from '
+                                         '<a href="http://www.flaticon.com">www.flaticon.com</a></p>')
 
 
 class ControlManagerThread(QThread):
