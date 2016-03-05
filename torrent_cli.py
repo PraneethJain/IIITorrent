@@ -40,8 +40,11 @@ def run_daemon(args):
         loop.run_until_complete(control.start())
 
         if os.path.isfile(STATE_FILENAME):
-            with open(STATE_FILENAME, 'rb') as f:
-                control.load(f)
+            try:
+                with open(STATE_FILENAME, 'rb') as f:
+                    control.load(f)
+            except Exception as err:
+                logging.warning('Failed to load program state: %r', err)
 
         stopping = False
 

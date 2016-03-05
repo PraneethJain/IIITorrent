@@ -8,10 +8,10 @@ import sys
 from contextlib import closing
 from functools import partial
 from math import floor
-from typing import Dict
+from typing import Dict, Optional
 
 # noinspection PyUnresolvedReferences
-from PyQt5.QtCore import Qt, QThread
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
 # noinspection PyUnresolvedReferences
 from PyQt5.QtGui import QIcon, QFont
 # noinspection PyUnresolvedReferences
@@ -41,10 +41,12 @@ file_icon = load_icon('file')
 directory_icon = load_icon('directory')
 
 
+def get_directory(directory: Optional[str]):
+    return directory if directory is not None else os.getcwd()
+
+
 class TorrentAddingDialog(QDialog):
     SELECTION_LABEL_FORMAT = 'Selected {} files ({})'
-
-    selected_download_dir = os.getcwd()
 
     def _traverse_file_tree(self, name: str, node: FileTreeNode, parent: QWidget):
         item = QTreeWidgetItem(parent)
@@ -65,7 +67,7 @@ class TorrentAddingDialog(QDialog):
         hbox = QHBoxLayout(widget)
         hbox.setContentsMargins(0, 0, 0, 0)
 
-        self._path_edit = QLineEdit(TorrentAddingDialog.selected_download_dir)
+        self._path_edit = QLineEdit(self._download_dir)
         self._path_edit.setReadOnly(True)
         hbox.addWidget(self._path_edit, 3)
 
@@ -77,12 +79,11 @@ class TorrentAddingDialog(QDialog):
         return widget
 
     def _browse(self):
-        new_download_dir = QFileDialog.getExistingDirectory(self, 'Select download directory',
-                                                            TorrentAddingDialog.selected_download_dir)
+        new_download_dir = QFileDialog.getExistingDirectory(self, 'Select download directory', self._download_dir)
         if not new_download_dir:
             return
 
-        TorrentAddingDialog.selected_download_dir = new_download_dir
+        self._download_dir = new_download_dir
         self._path_edit.setText(new_download_dir)
 
     def __init__(self, parent: QWidget, filename: str, torrent_info: TorrentInfo,
@@ -91,9 +92,11 @@ class TorrentAddingDialog(QDialog):
         self._torrent_info = torrent_info
         download_info = torrent_info.download_info
         self._control_thread = control_thread
+        self._control = control_thread.control
 
         vbox = QVBoxLayout(self)
 
+        self._download_dir = get_directory(self._control.last_download_dir)
         vbox.addWidget(QLabel('Download directory:'))
         vbox.addWidget(self._get_directory_browse_widget())
 
@@ -195,7 +198,8 @@ class TorrentAddingDialog(QDialog):
                 selected_file_count, humanize_size(selected_size)))
 
     def submit_torrent(self):
-        self._torrent_info.download_dir = TorrentAddingDialog.selected_download_dir
+        self._torrent_info.download_dir = self._download_dir
+        self._control.last_download_dir = self._download_dir
 
         file_paths = []
         for node, item in self._file_items:
@@ -204,7 +208,7 @@ class TorrentAddingDialog(QDialog):
         if not self._torrent_info.download_info.single_file_mode:
             self._torrent_info.download_info.select_files(file_paths, 'whitelist')
 
-        self._control_thread.loop.call_soon_threadsafe(self._control_thread.control.add, self._torrent_info)
+        self._control_thread.loop.call_soon_threadsafe(self._control.add, self._torrent_info)
 
         self.close()
 
@@ -315,6 +319,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(600, 500)
         self.setWindowTitle('BitTorrent Client')
 
+        control_thread.error_happened.connect(self._error_happened)
         control.torrent_added.connect(self._add_torrent_item)
         control.torrent_changed.connect(self._update_torrent_item)
         control.torrent_removed.connect(self._remove_torrent_item)
@@ -366,18 +371,23 @@ class MainWindow(QMainWindow):
                 self._pause_action.setEnabled(True)
             self._remove_action.setEnabled(True)
 
+    def _error_happened(self, description: str, err: Exception):
+        QMessageBox.critical(self, description, str(err))
+
     def _add_torrent_triggered(self):
-        filename, _ = QFileDialog.getOpenFileName(self, 'Add torrent', filter='Torrent file (*.torrent)')
+        filename, _ = QFileDialog.getOpenFileName(self, 'Add torrent', self._control_thread.control.last_torrent_dir,
+                                                  'Torrent file (*.torrent)')
         if not filename:
             return
 
         try:
             torrent_info = TorrentInfo.from_file(filename, download_dir=None)
+            self._control_thread.control.last_torrent_dir = os.path.dirname(filename)
 
             if torrent_info.download_info.info_hash in self._torrent_to_item:
                 raise ValueError('This torrent is already added')
         except Exception as err:
-            QMessageBox.critical(self, 'Failed to add torrent', str(err))
+            self._error_happened('Failed to add torrent', err)
             return
 
         TorrentAddingDialog(self, filename, torrent_info, self._control_thread).exec()
@@ -403,6 +413,8 @@ class MainWindow(QMainWindow):
 
 
 class ControlManagerThread(QThread):
+    error_happened = pyqtSignal(str, Exception)
+
     def __init__(self, control: ControlManager):
         super().__init__()
 
@@ -420,8 +432,11 @@ class ControlManagerThread(QThread):
 
     def _load_state(self):
         if os.path.isfile(STATE_FILENAME):
-            with open(STATE_FILENAME, 'rb') as f:
-                self._control.load(f)
+            try:
+                with open(STATE_FILENAME, 'rb') as f:
+                    self._control.load(f)
+            except Exception as err:
+                self.error_happened.emit(None, err)
 
     def _save_state(self):
         with open(STATE_FILENAME, 'wb') as f:

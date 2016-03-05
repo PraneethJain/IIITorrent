@@ -2,7 +2,7 @@ import asyncio
 import copy
 import logging
 import pickle
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from models import generate_peer_id, TorrentInfo, TorrentState
 from peer_tcp_server import PeerTCPServer
@@ -34,6 +34,9 @@ class ControlManager(QObject):
         self._server = PeerTCPServer(self._our_peer_id, self._torrent_managers)
 
         self._torrent_manager_executors = {}  # type: Dict[bytes, asyncio.Task]
+
+        self.last_torrent_dir = None   # type: Optional[str]
+        self.last_download_dir = None  # type: Optional[str]
 
     def get_torrents(self) -> List[TorrentInfo]:
         return list(self._torrents.values())
@@ -122,12 +125,12 @@ class ControlManager(QObject):
             torrent_info.download_info.reset_run_state()
             torrent_list.append(torrent_info)
 
-        pickle.dump(torrent_list, f)
+        pickle.dump((self.last_torrent_dir, self.last_download_dir, torrent_list), f)
 
         logger.info('state saved (%s torrents)', len(torrent_list))
 
     def load(self, f):
-        torrent_list = pickle.load(f)
+        self.last_torrent_dir, self.last_download_dir, torrent_list = pickle.load(f)
 
         for torrent_info in torrent_list:
             self.add(torrent_info)
