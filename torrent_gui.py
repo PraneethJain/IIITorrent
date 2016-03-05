@@ -27,7 +27,7 @@ from utils import humanize_speed, humanize_time, humanize_size
 logging.basicConfig(format='%(levelname)s %(asctime)s %(name)-23s %(message)s', datefmt='%H:%M:%S')
 
 
-STATE_FILENAME = 'state.bin'
+state_filename = os.path.expanduser('~/.torrent_gui_state')
 
 
 ICON_DIRECTORY = os.path.join(os.path.dirname(__file__), 'icons')
@@ -431,15 +431,15 @@ class ControlManagerThread(QThread):
         return self._control
 
     def _load_state(self):
-        if os.path.isfile(STATE_FILENAME):
+        if os.path.isfile(state_filename):
             try:
-                with open(STATE_FILENAME, 'rb') as f:
+                with open(state_filename, 'rb') as f:
                     self._control.load(f)
             except Exception as err:
                 self.error_happened.emit(None, err)
 
     def _save_state(self):
-        with open(STATE_FILENAME, 'wb') as f:
+        with open(state_filename, 'wb') as f:
             self._control.dump(f)
 
     def run(self):
