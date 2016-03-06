@@ -27,9 +27,6 @@ from utils import humanize_speed, humanize_time, humanize_size
 logging.basicConfig(format='%(levelname)s %(asctime)s %(name)-23s %(message)s', datefmt='%H:%M:%S')
 
 
-state_filename = os.path.expanduser('~/.torrent_gui_state')
-
-
 ICON_DIRECTORY = os.path.join(os.path.dirname(__file__), 'icons')
 
 
@@ -463,18 +460,6 @@ class ControlManagerThread(QThread):
     def control(self) -> ControlManager:
         return self._control
 
-    def _load_state(self):
-        if os.path.isfile(state_filename):
-            try:
-                with open(state_filename, 'rb') as f:
-                    self._control.load(f)
-            except Exception as err:
-                self.error_happened.emit(None, err)
-
-    def _save_state(self):
-        with open(state_filename, 'wb') as f:
-            self._control.dump(f)
-
     def run(self):
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
@@ -482,12 +467,13 @@ class ControlManagerThread(QThread):
             self._loop.run_until_complete(self._control.start())
             self._loop.run_until_complete(self._control_server.start())
 
-            self._load_state()
-
             try:
-                self._loop.run_forever()
-            finally:
-                self._save_state()
+                self._control.load_state()
+            except Exception as err:
+                self.error_happened.emit('Failed to load program state', err)
+            self._control.invoke_state_dumps()
+
+            self._loop.run_forever()
 
     def stop(self):
         if self._stopping:

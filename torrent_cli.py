@@ -16,9 +16,6 @@ from models import TorrentInfo, TorrentState
 logging.basicConfig(format='%(levelname)s %(asctime)s %(name)-23s %(message)s', datefmt='%H:%M:%S')
 
 
-STATE_FILENAME = 'state.bin'
-
-
 async def check_daemon_absence():
     try:
         async with ControlClient():
@@ -29,19 +26,18 @@ async def check_daemon_absence():
         raise RuntimeError('A daemon on this port is already running')
 
 
-def run_daemon(args):
+def run_daemon(_):
     with closing(asyncio.get_event_loop()) as loop:
         loop.run_until_complete(check_daemon_absence())
 
         control = ControlManager()
         loop.run_until_complete(control.start())
 
-        if os.path.isfile(STATE_FILENAME):
-            try:
-                with open(STATE_FILENAME, 'rb') as f:
-                    control.load(f)
-            except Exception as err:
-                logging.warning('Failed to load program state: %r', err)
+        try:
+            control.load_state()
+        except Exception as err:
+            logging.warning('Failed to load program state: %r', err)
+        control.invoke_state_dumps()
 
         stopping = False
 
@@ -60,11 +56,7 @@ def run_daemon(args):
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, partial(stop_daemon, control_server))
 
-        try:
-            loop.run_forever()
-        finally:
-            with open(STATE_FILENAME, 'wb') as f:
-                control.dump(f)
+        loop.run_forever()
 
 
 def show_handler(args):

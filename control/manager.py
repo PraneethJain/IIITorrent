@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import logging
+import os
 import pickle
 from typing import Dict, List, Optional
 
@@ -14,6 +15,9 @@ QObject, pyqtSignal = import_signals()
 
 
 __all__ = ['ControlManager']
+
+
+state_filename = os.path.expanduser('~/.torrent_gui_state')
 
 
 logger = logging.getLogger(__name__)
@@ -38,6 +42,7 @@ class ControlManager(QObject):
         self._server = PeerTCPServer(self._our_peer_id, self._torrent_managers)
 
         self._torrent_manager_executors = {}  # type: Dict[bytes, asyncio.Task]
+        self._state_updating_executor = None  # type: Optional[asyncio.Task]
 
         self.last_torrent_dir = None   # type: Optional[str]
         self.last_download_dir = None  # type: Optional[str]
@@ -122,7 +127,7 @@ class ControlManager(QObject):
         if pyqtSignal:
             self.torrent_changed.emit(TorrentState(torrent_info))
 
-    def dump(self, f):
+    def _dump_state(self):
         torrent_list = []
         for manager, torrent_info in self._torrents.items():
             torrent_info = copy.copy(torrent_info)
@@ -130,25 +135,49 @@ class ControlManager(QObject):
             torrent_info.download_info.reset_run_state()
             torrent_list.append(torrent_info)
 
-        pickle.dump((self.last_torrent_dir, self.last_download_dir, torrent_list), f)
+        try:
+            with open(state_filename, 'wb') as f:
+                pickle.dump((self.last_torrent_dir, self.last_download_dir, torrent_list), f)
+            logger.info('state saved (%s torrents)', len(torrent_list))
+        except Exception as err:
+            logger.warning('Failed to save state: %r', err)
 
-        logger.info('state saved (%s torrents)', len(torrent_list))
+    STATE_UPDATE_INTERVAL = 5 * 60
 
-    def load(self, f):
-        self.last_torrent_dir, self.last_download_dir, torrent_list = pickle.load(f)
+    async def _execute_state_updates(self):
+        while True:
+            await asyncio.sleep(ControlManager.STATE_UPDATE_INTERVAL)
+
+            self._dump_state()
+
+    def invoke_state_dumps(self):
+        self._state_updating_executor = asyncio.ensure_future(self._execute_state_updates())
+
+    def load_state(self):
+        if not os.path.isfile(state_filename):
+            return
+
+        with open(state_filename, 'rb') as f:
+            self.last_torrent_dir, self.last_download_dir, torrent_list = pickle.load(f)
 
         for torrent_info in torrent_list:
             self.add(torrent_info)
-
         logger.info('state recovered (%s torrents)', len(torrent_list))
 
     async def stop(self):
         await self._server.stop()
 
-        for task in self._torrent_manager_executors.values():
+        tasks = list(self._torrent_manager_executors.values())
+        if self._state_updating_executor is not None:
+            tasks.append(self._state_updating_executor)
+
+        for task in tasks:
             task.cancel()
-        if self._torrent_manager_executors:
-            await asyncio.wait(self._torrent_manager_executors.values())
+        if tasks:
+            await asyncio.wait(tasks)
 
         if self._torrent_managers:
             await asyncio.wait([manager.stop() for manager in self._torrent_managers.values()])
+
+        if self._state_updating_executor is not None:  # Only if we have loaded starting state
+            self._dump_state()
