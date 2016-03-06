@@ -11,6 +11,9 @@ from file_structure import FileStructure
 from models import SHA1_DIGEST_LEN, DownloadInfo, Peer, BlockRequest
 
 
+__all__ = ['PeerTCPClient']
+
+
 class MessageType(Enum):
     choke = 0
     unchoke = 1

@@ -9,10 +9,7 @@ import sys
 from contextlib import closing, suppress
 from functools import partial
 
-import torrent_formatters
-from control_client import ControlClient
-from control_manager import ControlManager
-from control_server import ControlServer, DaemonExit
+from control import ControlManager, ControlClient, ControlServer, DaemonExit, formatters
 from models import TorrentInfo, TorrentState
 
 
@@ -72,8 +69,8 @@ def run_daemon(args):
 
 def show_handler(args):
     torrent_info = TorrentInfo.from_file(args.filename, download_dir=None)
-    content_description = torrent_formatters.join_lines(
-        torrent_formatters.format_title(torrent_info, True) + torrent_formatters.format_content(torrent_info))
+    content_description = formatters.join_lines(
+        formatters.format_title(torrent_info, True) + formatters.format_content(torrent_info))
     print(content_description, end='')
 
 
@@ -130,8 +127,8 @@ async def status_handler(args):
     async with ControlClient() as client:
         torrent_states = await client.execute(status_server_handler)
 
-    paragraphs = [torrent_formatters.join_lines(torrent_formatters.format_title(state, args.verbose) +
-                                                torrent_formatters.format_status(state, args.verbose))
+    paragraphs = [formatters.join_lines(formatters.format_title(state, args.verbose) +
+                                        formatters.format_status(state, args.verbose))
                   for state in torrent_states]
     print('\n'.join(paragraphs).rstrip())
 

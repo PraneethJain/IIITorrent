@@ -19,7 +19,7 @@ from PyQt5.QtWidgets import QWidget, QListWidget, QAbstractItemView, QLabel, QVB
     QListWidgetItem, QMainWindow, QApplication, QFileDialog, QMessageBox, QDialog, QDialogButtonBox, QTreeWidget, \
     QTreeWidgetItem, QHeaderView, QHBoxLayout, QPushButton, QLineEdit
 
-from control_manager import ControlManager
+from control import ControlManager
 from models import TorrentState, TorrentInfo, FileTreeNode, FileInfo
 from utils import humanize_speed, humanize_time, humanize_size
 
@@ -392,7 +392,8 @@ class MainWindow(QMainWindow):
 
         TorrentAddingDialog(self, filename, torrent_info, self._control_thread).exec()
 
-    async def _invoke_control_action(self, action, info_hash: bytes):
+    @staticmethod
+    async def _invoke_control_action(action, info_hash: bytes):
         try:
             result = action(info_hash)
             if asyncio.iscoroutine(result):
@@ -403,7 +404,8 @@ class MainWindow(QMainWindow):
     def _control_action_triggered(self, action):
         for item in self._list_widget.selectedItems():
             info_hash = item.data(Qt.UserRole)
-            asyncio.run_coroutine_threadsafe(self._invoke_control_action(action, info_hash), self._control_thread.loop)
+            asyncio.run_coroutine_threadsafe(MainWindow._invoke_control_action(action, info_hash),
+                                             self._control_thread.loop)
 
     def _show_about(self):
         QMessageBox.about(self, 'About', '<p><b>Prototype of BitTorrent client</b></p>'

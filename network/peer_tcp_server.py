@@ -2,9 +2,12 @@ import asyncio
 import logging
 from typing import Dict
 
+import algorithms
 from models import Peer
-from peer_tcp_client import PeerTCPClient
-from torrent_manager import TorrentManager
+from network.peer_tcp_client import PeerTCPClient
+
+
+__all__= ['PeerTCPServer']
 
 
 logger = logging.getLogger(__name__)
@@ -12,7 +15,7 @@ logger.setLevel(logging.DEBUG)
 
 
 class PeerTCPServer:
-    def __init__(self, our_peer_id: bytes, torrent_managers: Dict[bytes, TorrentManager]):
+    def __init__(self, our_peer_id: bytes, torrent_managers: Dict[bytes, 'algorithms.TorrentManager']):
         self._our_peer_id = our_peer_id
         self._torrent_managers = torrent_managers
 

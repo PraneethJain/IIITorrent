@@ -2,8 +2,12 @@ import asyncio
 import logging
 from typing import Callable, TypeVar
 
-from control_manager import ControlManager
-from control_server import ControlServer
+from control.manager import ControlManager
+from control.server import ControlServer
+
+
+__all__ = ['ControlClient']
+
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)

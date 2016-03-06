@@ -4,7 +4,11 @@ import pickle
 import struct
 from typing import Any, cast, Callable
 
-from control_manager import ControlManager
+from control.manager import ControlManager
+
+
+__all__ = ['ControlServer', 'DaemonExit']
+
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)

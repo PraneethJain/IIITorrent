@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Optional
 
 from models import DownloadInfo
-from tracker_clients.base import BaseTrackerClient, EventType, TrackerError, parse_compact_peers_list
+from network.tracker_clients.base import BaseTrackerClient, EventType, TrackerError, parse_compact_peers_list
 
 
 __all__ = ['UDPTrackerClient']

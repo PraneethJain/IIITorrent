@@ -1,6 +1,5 @@
 from math import floor, log
-from typing import List, TypeVar, Sequence, cast, Callable
-from typing import Optional
+from typing import List, TypeVar, Sequence
 
 
 T = TypeVar('T', Sequence, memoryview)

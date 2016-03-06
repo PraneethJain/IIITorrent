@@ -4,13 +4,16 @@ import logging
 import pickle
 from typing import Dict, List, Optional
 
+from algorithms import TorrentManager
 from models import generate_peer_id, TorrentInfo, TorrentState
-from peer_tcp_server import PeerTCPServer
-from torrent_manager import TorrentManager
+from network import PeerTCPServer
 from utils import import_signals
 
 
 QObject, pyqtSignal = import_signals()
+
+
+__all__ = ['ControlManager']
 
 
 logger = logging.getLogger(__name__)

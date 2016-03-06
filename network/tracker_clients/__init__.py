@@ -1,9 +1,10 @@
 from urllib.parse import urlparse
 
+from network.tracker_clients.http import *
+from network.tracker_clients.udp import *
+
 from models import DownloadInfo
-from tracker_clients.base import *
-from tracker_clients.http import *
-from tracker_clients.udp import *
+from network.tracker_clients.base import *
 
 
 def create_tracker_client(announce_url: str, download_info: DownloadInfo, our_peer_id: bytes) -> BaseTrackerClient:

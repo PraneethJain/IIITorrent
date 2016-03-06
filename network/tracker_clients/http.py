@@ -7,7 +7,7 @@ import aiohttp
 import bencodepy
 
 from models import Peer, DownloadInfo
-from tracker_clients.base import BaseTrackerClient, TrackerError, parse_compact_peers_list, EventType
+from network.tracker_clients.base import BaseTrackerClient, TrackerError, parse_compact_peers_list, EventType
 
 
 __all__ = ['HTTPTrackerClient']
