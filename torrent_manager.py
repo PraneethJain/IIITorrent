@@ -9,21 +9,13 @@ from math import ceil
 from typing import Dict, List, Optional, Tuple, Sequence, Iterable, cast, Iterator
 
 from file_structure import FileStructure
-from models import BlockRequestFuture, DownloadInfo, Peer, TorrentInfo, TorrentState
+from models import BlockRequestFuture, DownloadInfo, Peer, TorrentInfo, TorrentState, SessionStatistics
 from peer_tcp_client import PeerTCPClient
 from tracker_clients import BaseTrackerClient, create_tracker_client, EventType
 from utils import humanize_size, floor_to, import_signals
 
 
 QObject, pyqtSignal = import_signals()
-
-
-class NotEnoughPeersError(RuntimeError):
-    pass
-
-
-class NoRequestsError(RuntimeError):
-    pass
 
 
 DOWNLOAD_REQUEST_QUEUE_SIZE = 12
@@ -223,7 +215,7 @@ class Announcer:
                 tier.remove(url)
                 tier.insert(0, url)
 
-    async def _execute_regularly(self):
+    async def execute(self):
         try:
             while True:
                 if self._last_tracker_client.min_interval is not None:
@@ -247,16 +239,13 @@ class Announcer:
         finally:
             await self.try_to_announce(EventType.stopped)
 
-    def invoke(self):
-        self._task = asyncio.ensure_future(self._execute_regularly())
 
-    async def stop(self):
-        if self._task is not None:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
+class NotEnoughPeersError(RuntimeError):
+    pass
+
+
+class NoRequestsError(RuntimeError):
+    pass
 
 
 class Downloader(QObject):
@@ -644,6 +633,128 @@ class Downloader(QObject):
             await asyncio.wait(self._request_executors)
 
 
+class Uploader:
+    def __init__(self, torrent_info: TorrentInfo, logger: logging.Logger, peer_manager: PeerManager):
+        self._download_info = torrent_info.download_info
+        self._statistics = self._download_info.session_statistics
+
+        self._logger = logger
+        self._peer_manager = peer_manager
+
+    CHOKING_CHANGING_TIME = 10
+    UPLOAD_PEER_COUNT = 4
+
+    ITERS_PER_OPTIMISTIC_UNCHOKING = 3
+    CONNECTED_RECENTLY_THRESHOLD = 60
+    CONNECTED_RECENTLY_COEFF = 3
+
+    def _select_optimistically_unchoked(self, peers: Iterable[Peer]) -> Peer:
+        cur_time = time.time()
+        connected_recently = []
+        remaining_peers = []
+        peer_data = self._peer_manager.peer_data
+        for peer in peers:
+            if cur_time - peer_data[peer].connected_time <= Uploader.CONNECTED_RECENTLY_THRESHOLD:
+                connected_recently.append(peer)
+            else:
+                remaining_peers.append(peer)
+
+        max_index = len(remaining_peers) + Uploader.CONNECTED_RECENTLY_COEFF * len(connected_recently) - 1
+        index = random.randint(0, max_index)
+        if index < len(remaining_peers):
+            return remaining_peers[index]
+        return connected_recently[(index - len(remaining_peers)) % len(connected_recently)]
+
+    def get_peer_upload_rate(self, peer: Peer) -> int:
+        data = self._peer_manager.peer_data[peer]
+
+        rate = data.client.downloaded  # We owe them for downloading
+        if self._download_info.complete:
+            rate += data.client.uploaded  # To reach maximal upload speed
+        return rate
+
+    async def execute(self):
+        prev_unchoked_peers = set()
+        optimistically_unchoked = None
+        for i in itertools.count():
+            peer_data = self._peer_manager.peer_data
+            alive_peers = list(sorted(peer_data.keys(), key=self.get_peer_upload_rate, reverse=True))
+            cur_unchoked_peers = set()
+            interested_count = 0
+
+            if Uploader.UPLOAD_PEER_COUNT:
+                if i % Uploader.ITERS_PER_OPTIMISTIC_UNCHOKING == 0:
+                    if alive_peers:
+                        optimistically_unchoked = self._select_optimistically_unchoked(alive_peers)
+                    else:
+                        optimistically_unchoked = None
+
+                if optimistically_unchoked is not None and optimistically_unchoked in peer_data:
+                    cur_unchoked_peers.add(optimistically_unchoked)
+                    if peer_data[optimistically_unchoked].client.peer_interested:
+                        interested_count += 1
+
+            for peer in cast(List[Peer], alive_peers):
+                if interested_count == Uploader.UPLOAD_PEER_COUNT:
+                    break
+                if peer_data[peer].client.peer_interested:
+                    interested_count += 1
+
+                cur_unchoked_peers.add(peer)
+
+            for peer in prev_unchoked_peers - cur_unchoked_peers:
+                if peer in peer_data:
+                    peer_data[peer].client.am_choking = True
+            for peer in cur_unchoked_peers:
+                peer_data[peer].client.am_choking = False
+            self._logger.debug('now %s peers are unchoked (total_uploaded = %s)', len(cur_unchoked_peers),
+                               humanize_size(self._statistics.total_uploaded))
+
+            await asyncio.sleep(Uploader.CHOKING_CHANGING_TIME)
+
+            prev_unchoked_peers = cur_unchoked_peers
+
+
+class SpeedMeasurer(QObject):
+    if pyqtSignal:
+        updated = pyqtSignal()
+
+    def __init__(self, statistics: SessionStatistics):
+        super().__init__()
+
+        self._statistics = statistics
+
+    SPEED_MEASUREMENT_PERIOD = 60
+    SPEED_UPDATE_TIMEOUT = 2
+
+    assert SPEED_MEASUREMENT_PERIOD % SPEED_UPDATE_TIMEOUT == 0
+
+    async def execute(self):
+        max_queue_length = SpeedMeasurer.SPEED_MEASUREMENT_PERIOD // SpeedMeasurer.SPEED_UPDATE_TIMEOUT
+
+        downloaded_queue = deque()
+        uploaded_queue = deque()
+        while True:
+            downloaded_queue.append(self._statistics.downloaded_per_session)
+            uploaded_queue.append(self._statistics.uploaded_per_session)
+
+            if len(downloaded_queue) > 1:
+                period_in_seconds = (len(downloaded_queue) - 1) * SpeedMeasurer.SPEED_UPDATE_TIMEOUT
+                downloaded_per_period = downloaded_queue[-1] - downloaded_queue[0]
+                uploaded_per_period = uploaded_queue[-1] - uploaded_queue[0]
+                self._statistics.download_speed = downloaded_per_period / period_in_seconds
+                self._statistics.upload_speed = uploaded_per_period / period_in_seconds
+
+            if len(downloaded_queue) > max_queue_length:
+                downloaded_queue.popleft()
+                uploaded_queue.popleft()
+
+            if pyqtSignal:
+                self.updated.emit()
+
+            await asyncio.sleep(SpeedMeasurer.SPEED_UPDATE_TIMEOUT)
+
+
 class TorrentManager(QObject):
     if pyqtSignal:
         state_changed = pyqtSignal()
@@ -669,7 +780,7 @@ class TorrentManager(QObject):
         self._logger = logging.getLogger('"{}"'.format(short_name))
         self._logger.setLevel(TorrentManager.LOGGER_LEVEL)
 
-        self._tasks = []              # type: List[asyncio.Task]
+        self._executors = []  # type: List[asyncio.Task]
 
         self._file_structure = FileStructure(torrent_info.download_dir, torrent_info.download_info)
 
@@ -677,112 +788,11 @@ class TorrentManager(QObject):
         self._announcer = Announcer(torrent_info, our_peer_id, server_port, self._logger, self._peer_manager)
         self._downloader = Downloader(torrent_info, our_peer_id, self._logger, self._file_structure,
                                       self._peer_manager, self._announcer)
-        if pyqtSignal is not None:
+        self._uploader = Uploader(torrent_info, self._logger, self._peer_manager)
+        self._speed_measurer = SpeedMeasurer(torrent_info.download_info.session_statistics)
+        if pyqtSignal:
             self._downloader.progress.connect(self.state_changed)
-
-    CHOKING_CHANGING_TIME = 10
-    UPLOAD_PEER_COUNT = 4
-
-    ITERS_PER_OPTIMISTIC_UNCHOKING = 3
-    CONNECTED_RECENTLY_THRESHOLD = 60
-    CONNECTED_RECENTLY_COEFF = 3
-
-    def _select_optimistically_unchoked(self, peers: Iterable[Peer]) -> Peer:
-        cur_time = time.time()
-        connected_recently = []
-        remaining_peers = []
-        peer_data = self._peer_manager.peer_data
-        for peer in peers:
-            if cur_time - peer_data[peer].connected_time <= TorrentManager.CONNECTED_RECENTLY_THRESHOLD:
-                connected_recently.append(peer)
-            else:
-                remaining_peers.append(peer)
-
-        max_index = len(remaining_peers) + TorrentManager.CONNECTED_RECENTLY_COEFF * len(connected_recently) - 1
-        index = random.randint(0, max_index)
-        if index < len(remaining_peers):
-            return remaining_peers[index]
-        return connected_recently[(index - len(remaining_peers)) % len(connected_recently)]
-
-    def get_peer_upload_rate(self, peer: Peer) -> int:
-        data = self._peer_manager.peer_data[peer]
-
-        rate = data.client.downloaded  # We owe them for downloading
-        if self._download_info.complete:
-            rate += data.client.uploaded  # To reach maximal upload speed
-        return rate
-
-    async def _execute_uploading(self):
-        prev_unchoked_peers = set()
-        optimistically_unchoked = None
-        for i in itertools.count():
-            peer_data = self._peer_manager.peer_data
-            alive_peers = list(sorted(peer_data.keys(), key=self.get_peer_upload_rate, reverse=True))
-            cur_unchoked_peers = set()
-            interested_count = 0
-
-            if TorrentManager.UPLOAD_PEER_COUNT:
-                if i % TorrentManager.ITERS_PER_OPTIMISTIC_UNCHOKING == 0:
-                    if alive_peers:
-                        optimistically_unchoked = self._select_optimistically_unchoked(alive_peers)
-                    else:
-                        optimistically_unchoked = None
-
-                if optimistically_unchoked is not None and optimistically_unchoked in peer_data:
-                    cur_unchoked_peers.add(optimistically_unchoked)
-                    if peer_data[optimistically_unchoked].client.peer_interested:
-                        interested_count += 1
-
-            for peer in cast(List[Peer], alive_peers):
-                if interested_count == TorrentManager.UPLOAD_PEER_COUNT:
-                    break
-                if peer_data[peer].client.peer_interested:
-                    interested_count += 1
-
-                cur_unchoked_peers.add(peer)
-
-            for peer in prev_unchoked_peers - cur_unchoked_peers:
-                if peer in peer_data:
-                    peer_data[peer].client.am_choking = True
-            for peer in cur_unchoked_peers:
-                peer_data[peer].client.am_choking = False
-            self._logger.debug('now %s peers are unchoked (total_uploaded = %s)', len(cur_unchoked_peers),
-                               humanize_size(self._statistics.total_uploaded))
-
-            await asyncio.sleep(TorrentManager.CHOKING_CHANGING_TIME)
-
-            prev_unchoked_peers = cur_unchoked_peers
-
-    SPEED_MEASUREMENT_PERIOD = 60
-    SPEED_UPDATE_TIMEOUT = 2
-
-    assert SPEED_MEASUREMENT_PERIOD % SPEED_UPDATE_TIMEOUT == 0
-
-    async def _execute_speed_measurement(self):
-        max_queue_length = TorrentManager.SPEED_MEASUREMENT_PERIOD // TorrentManager.SPEED_UPDATE_TIMEOUT
-
-        downloaded_queue = deque()
-        uploaded_queue = deque()
-        while True:
-            downloaded_queue.append(self._statistics.downloaded_per_session)
-            uploaded_queue.append(self._statistics.uploaded_per_session)
-
-            if len(downloaded_queue) > 1:
-                period_in_seconds = (len(downloaded_queue) - 1) * TorrentManager.SPEED_UPDATE_TIMEOUT
-                downloaded_per_period = downloaded_queue[-1] - downloaded_queue[0]
-                uploaded_per_period = uploaded_queue[-1] - uploaded_queue[0]
-                self._statistics.download_speed = downloaded_per_period / period_in_seconds
-                self._statistics.upload_speed = uploaded_per_period / period_in_seconds
-
-            if len(downloaded_queue) > max_queue_length:
-                downloaded_queue.popleft()
-                uploaded_queue.popleft()
-
-            if pyqtSignal:
-                self.state_changed.emit()
-
-            await asyncio.sleep(TorrentManager.SPEED_UPDATE_TIMEOUT)
-        return downloaded_queue
+            self._speed_measurer.updated.connect(self.state_changed)
 
     ANNOUNCE_FAILED_SLEEP_TIME = 3
 
@@ -797,13 +807,13 @@ class TorrentManager(QObject):
 
         self._peer_manager.connect_to_peers(self._announcer.last_tracker_client.peers, True)
 
-        self._tasks += [asyncio.ensure_future(coro) for coro in [
-            self._execute_uploading(),
-            self._execute_speed_measurement()
+        self._executors += [asyncio.ensure_future(coro) for coro in [
+            self._announcer.execute(),
+            self._uploader.execute(),
+            self._speed_measurer.execute(),
         ]]
 
         self._peer_manager.invoke()
-        self._announcer.invoke()
         await self._downloader.run()
 
     def accept_client(self, peer: Peer, client: PeerTCPClient):
@@ -811,12 +821,9 @@ class TorrentManager(QObject):
 
     async def stop(self):
         await self._downloader.stop()
-        await self._announcer.stop()
         await self._peer_manager.stop()
 
-        executors = self._tasks
-        executors = [task for task in executors if task is not None]
-
+        executors = [task for task in self._executors if task is not None]
         for task in executors:
             task.cancel()
         if executors:
