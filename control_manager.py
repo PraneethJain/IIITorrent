@@ -48,7 +48,8 @@ class ControlManager(QObject):
         info_hash = torrent_info.download_info.info_hash
 
         manager = TorrentManager(torrent_info, self._our_peer_id, self._server.port)
-        manager.torrent_changed.connect(self.torrent_changed)
+        if pyqtSignal:
+            manager.state_changed.connect(lambda: self.torrent_changed.emit(TorrentState(torrent_info)))
         self._torrent_managers[info_hash] = manager
         self._torrent_manager_executors[info_hash] = asyncio.ensure_future(manager.run())
 
@@ -88,8 +89,8 @@ class ControlManager(QObject):
         del self._torrent_manager_executors[info_hash]
 
         manager = self._torrent_managers[info_hash]
-        await manager.stop()
         del self._torrent_managers[info_hash]
+        await manager.stop()
 
     async def remove(self, info_hash: bytes):
         if info_hash not in self._torrents:
