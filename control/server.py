@@ -2,7 +2,7 @@ import asyncio
 import logging
 import pickle
 import struct
-from typing import Any, cast, Callable
+from typing import Any, cast, Callable, Optional
 
 from control.manager import ControlManager
 
@@ -19,7 +19,7 @@ class DaemonExit(Exception):
 
 
 class ControlServer:
-    def __init__(self, control: ControlManager, daemon_stop_handler: Callable[['ControlServer'], None]):
+    def __init__(self, control: ControlManager, daemon_stop_handler: Optional[Callable[['ControlServer'], None]]):
         self._control = control
         self._daemon_stop_handler = daemon_stop_handler
 
@@ -71,7 +71,8 @@ class ControlServer:
 
                 if isinstance(result, DaemonExit):
                     logger.info('stop command received')
-                    self._daemon_stop_handler(self)
+                    if self._daemon_stop_handler is not None:
+                        self._daemon_stop_handler(self)
                     return
         except asyncio.IncompleteReadError:
             pass

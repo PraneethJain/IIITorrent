@@ -22,6 +22,7 @@ logger.setLevel(logging.DEBUG)
 
 class ControlManager(QObject):
     if pyqtSignal:
+        torrents_suggested = pyqtSignal(list)
         torrent_added = pyqtSignal(TorrentState)
         torrent_changed = pyqtSignal(TorrentState)
         torrent_removed = pyqtSignal(bytes)

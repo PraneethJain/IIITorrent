@@ -19,7 +19,7 @@ from PyQt5.QtWidgets import QWidget, QListWidget, QAbstractItemView, QLabel, QVB
     QListWidgetItem, QMainWindow, QApplication, QFileDialog, QMessageBox, QDialog, QDialogButtonBox, QTreeWidget, \
     QTreeWidgetItem, QHeaderView, QHBoxLayout, QPushButton, QLineEdit
 
-from control import ControlManager
+from control import ControlManager, ControlServer, ControlClient
 from models import TorrentState, TorrentInfo, FileTreeNode, FileInfo
 from utils import humanize_speed, humanize_time, humanize_size
 
@@ -345,6 +345,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle('BitTorrent Client')
 
         control_thread.error_happened.connect(self._error_happened)
+        control.torrents_suggested.connect(self.add_torrent_files)
         control.torrent_added.connect(self._add_torrent_item)
         control.torrent_changed.connect(self._update_torrent_item)
         control.torrent_removed.connect(self._remove_torrent_item)
@@ -446,11 +447,12 @@ class MainWindow(QMainWindow):
 class ControlManagerThread(QThread):
     error_happened = pyqtSignal(str, Exception)
 
-    def __init__(self, control: ControlManager):
+    def __init__(self):
         super().__init__()
 
         self._loop = None  # type: asyncio.AbstractEventLoop
-        self._control = control
+        self._control = ControlManager()
+        self._control_server = ControlServer(self._control, None)
         self._stopping = False
 
     @property
@@ -478,6 +480,7 @@ class ControlManagerThread(QThread):
         asyncio.set_event_loop(self._loop)
         with closing(self._loop):
             self._loop.run_until_complete(self._control.start())
+            self._loop.run_until_complete(self._control_server.start())
 
             self._load_state()
 
@@ -491,10 +494,25 @@ class ControlManagerThread(QThread):
             return
         self._stopping = True
 
-        stop_fut = asyncio.run_coroutine_threadsafe(self._control.stop(), self._loop)
+        stop_fut = asyncio.run_coroutine_threadsafe(asyncio.wait([self._control_server.stop(), self._control.stop()]),
+                                                    self._loop)
         stop_fut.add_done_callback(lambda fut: self._loop.stop())
 
         self.wait()
+
+
+def suggest_torrents(manager: ControlManager, filenames: List[str]):
+    manager.torrents_suggested.emit(filenames)
+
+
+async def find_another_daemon(filenames: List[str]) -> bool:
+    try:
+        async with ControlClient() as client:
+            if filenames:
+                await client.execute(partial(suggest_torrents, filenames=filenames))
+        return True
+    except RuntimeError:
+        return False
 
 
 def main():
@@ -509,12 +527,17 @@ def main():
     app = QApplication(sys.argv)
     app.setWindowIcon(load_icon('logo'))
 
-    control = ControlManager()
-    control_thread = ControlManagerThread(control)
-    control_thread.start()
+    with closing(asyncio.get_event_loop()) as loop:
+        if loop.run_until_complete(find_another_daemon(args.filenames)):
+            if not args.filenames:
+                QMessageBox.critical(None, 'Failed to start', 'Another program instance is already running')
+            return
 
-    app.lastWindowClosed.connect(control_thread.stop)
+    control_thread = ControlManagerThread()
     main_window = MainWindow(control_thread)
+
+    control_thread.start()
+    app.lastWindowClosed.connect(control_thread.stop)
 
     main_window.add_torrent_files(args.filenames)
 
