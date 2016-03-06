@@ -2,9 +2,9 @@ import asyncio
 import logging
 from typing import Dict
 
-import algorithms
-from models import Peer
-from network.peer_tcp_client import PeerTCPClient
+from torrent_client import algorithms
+from torrent_client.models import Peer
+from torrent_client.network.peer_tcp_client import PeerTCPClient
 
 
 __all__= ['PeerTCPServer']

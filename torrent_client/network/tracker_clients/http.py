@@ -1,13 +1,14 @@
 import logging
 import urllib.parse
 from collections import OrderedDict
-from typing import cast, Optional
+from typing import Optional, cast
 
 import aiohttp
 import bencodepy
 
-from models import Peer, DownloadInfo
-from network.tracker_clients.base import BaseTrackerClient, TrackerError, parse_compact_peers_list, EventType
+from torrent_client.models import Peer, DownloadInfo
+from torrent_client.network.tracker_clients.base import BaseTrackerClient, TrackerError, parse_compact_peers_list, \
+    EventType
 
 
 __all__ = ['HTTPTrackerClient']

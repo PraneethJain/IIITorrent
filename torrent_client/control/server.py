@@ -4,7 +4,7 @@ import pickle
 import struct
 from typing import Any, cast, Callable, Optional
 
-from control.manager import ControlManager
+from torrent_client.control.manager import ControlManager
 
 
 __all__ = ['ControlServer', 'DaemonExit']

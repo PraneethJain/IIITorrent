@@ -4,7 +4,7 @@ import os
 from bisect import bisect_right
 from typing import Iterable, BinaryIO, Tuple
 
-from models import DownloadInfo
+from torrent_client.models import DownloadInfo
 
 
 def delegate_to_executor(func):

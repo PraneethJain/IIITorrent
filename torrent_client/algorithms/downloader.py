@@ -7,12 +7,12 @@ from collections import deque, OrderedDict
 from math import ceil
 from typing import List, Optional, Tuple, Iterator
 
-from algorithms.announcer import Announcer
-from algorithms.peer_manager import PeerData, PeerManager
-from file_structure import FileStructure
-from models import BlockRequestFuture, Peer, TorrentInfo, TorrentState
-from network import EventType
-from utils import floor_to, import_signals
+from torrent_client.algorithms.announcer import Announcer
+from torrent_client.algorithms.peer_manager import PeerData, PeerManager
+from torrent_client.file_structure import FileStructure
+from torrent_client.models import BlockRequestFuture, Peer, TorrentInfo, TorrentState
+from torrent_client.network import EventType
+from torrent_client.utils import floor_to, import_signals
 
 
 QObject, pyqtSignal = import_signals()

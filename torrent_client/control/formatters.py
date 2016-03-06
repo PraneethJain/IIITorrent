@@ -1,8 +1,8 @@
 from math import floor
 from typing import Iterable, List, Union
 
-from models import DownloadInfo, TorrentInfo, TorrentState
-from utils import humanize_size, humanize_speed, floor_to, humanize_time
+from torrent_client.models import DownloadInfo, TorrentInfo, TorrentState
+from torrent_client.utils import humanize_size, humanize_speed, floor_to, humanize_time
 
 
 COLUMN_WIDTH = 30

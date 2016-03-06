@@ -3,9 +3,9 @@ import logging
 import time
 from typing import Dict, Optional, Sequence
 
-from file_structure import FileStructure
-from models import Peer, TorrentInfo
-from network import PeerTCPClient
+from torrent_client.file_structure import FileStructure
+from torrent_client.models import Peer, TorrentInfo
+from torrent_client.network import PeerTCPClient
 
 
 class PeerData:

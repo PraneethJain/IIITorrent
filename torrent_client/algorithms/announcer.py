@@ -2,9 +2,9 @@ import asyncio
 import logging
 from typing import Optional
 
-from algorithms.peer_manager import PeerManager
-from models import TorrentInfo
-from network import BaseTrackerClient, EventType, create_tracker_client
+from torrent_client.algorithms.peer_manager import PeerManager
+from torrent_client.models import TorrentInfo
+from torrent_client.network import BaseTrackerClient, EventType, create_tracker_client
 
 
 class Announcer:

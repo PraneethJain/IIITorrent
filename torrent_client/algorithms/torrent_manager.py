@@ -1,17 +1,17 @@
 import asyncio
 import logging
 import random
-from typing import Optional
+from typing import List, Optional
 
-from algorithms.announcer import Announcer
-from algorithms.downloader import Downloader
-from algorithms.peer_manager import PeerManager
-from algorithms.speed_measurer import SpeedMeasurer
-from algorithms.uploader import Uploader
-from file_structure import FileStructure
-from models import DownloadInfo, List, Peer, TorrentInfo
-from network import EventType, PeerTCPClient
-from utils import import_signals
+from torrent_client.algorithms.announcer import Announcer
+from torrent_client.algorithms.downloader import Downloader
+from torrent_client.algorithms.peer_manager import PeerManager
+from torrent_client.algorithms.speed_measurer import SpeedMeasurer
+from torrent_client.algorithms.uploader import Uploader
+from torrent_client.file_structure import FileStructure
+from torrent_client.models import Peer, TorrentInfo, DownloadInfo
+from torrent_client.network import EventType, PeerTCPClient
+from torrent_client.utils import import_signals
 
 
 QObject, pyqtSignal = import_signals()

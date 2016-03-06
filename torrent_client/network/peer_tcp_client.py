@@ -7,8 +7,8 @@ from typing import Optional, Tuple, List, cast, Sequence
 
 from bitarray import bitarray
 
-from file_structure import FileStructure
-from models import SHA1_DIGEST_LEN, DownloadInfo, Peer, BlockRequest
+from torrent_client.file_structure import FileStructure
+from torrent_client.models import SHA1_DIGEST_LEN, DownloadInfo, Peer, BlockRequest
 
 
 __all__ = ['PeerTCPClient']

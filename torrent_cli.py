@@ -9,8 +9,8 @@ import sys
 from contextlib import closing, suppress
 from functools import partial
 
-from control import ControlManager, ControlClient, ControlServer, DaemonExit, formatters
-from models import TorrentInfo, TorrentState
+from torrent_client.control import ControlManager, ControlClient, ControlServer, DaemonExit, formatters
+from torrent_client.models import TorrentInfo, TorrentState
 
 
 logging.basicConfig(format='%(levelname)s %(asctime)s %(name)-23s %(message)s', datefmt='%H:%M:%S')

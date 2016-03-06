@@ -8,7 +8,7 @@ import sys
 from contextlib import closing
 from functools import partial, partialmethod
 from math import floor
-from typing import Dict, Optional, List
+from typing import Dict, List, Optional
 
 # noinspection PyUnresolvedReferences
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
@@ -19,9 +19,9 @@ from PyQt5.QtWidgets import QWidget, QListWidget, QAbstractItemView, QLabel, QVB
     QListWidgetItem, QMainWindow, QApplication, QFileDialog, QMessageBox, QDialog, QDialogButtonBox, QTreeWidget, \
     QTreeWidgetItem, QHeaderView, QHBoxLayout, QPushButton, QLineEdit
 
-from control import ControlManager, ControlServer, ControlClient
-from models import TorrentState, TorrentInfo, FileTreeNode, FileInfo
-from utils import humanize_speed, humanize_time, humanize_size
+from torrent_client.control import ControlManager, ControlServer, ControlClient
+from torrent_client.models import TorrentState, TorrentInfo, FileTreeNode, FileInfo
+from torrent_client.utils import humanize_speed, humanize_time, humanize_size
 
 
 logging.basicConfig(format='%(levelname)s %(asctime)s %(name)-23s %(message)s', datefmt='%H:%M:%S')
