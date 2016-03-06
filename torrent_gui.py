@@ -338,7 +338,8 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(self._list_widget)
 
-        self.setMinimumSize(600, 500)
+        self.setMinimumSize(550, 450)
+        self.resize(600, 500)
         self.setWindowTitle('BitTorrent Client')
 
         control_thread.error_happened.connect(self._error_happened)
