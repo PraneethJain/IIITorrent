@@ -1,57 +1,117 @@
 bit-torrent
 ===========
 
-A prototype of BitTorrent client
+Simple BitTorrent client built with Python's asyncio
 
-Requirements
+*A project I made for Python course.*
+
+![Main window screenshot](screenshot.png)
+
+Features
+--------
+
+* Downloading torrents and sharing received data
+* Graphical interface (supports Drag'n'Drop and can be assigned to *.torrent files in system "Open with..." dialog)
+* Console interface
+* Pausing torrents, watching progress, download and upload speed, ETA
+* Selecting which files in a torrent you want to download
+* Saving state between program restarts
+
+Implemented specifications:
+
+* The BitTorrent Protocol Specification ([BEP 0003][] with some additions from [the community spec][])
+* Multitracker Metadata Extension ([BEP 0012][])
+* *(partially)* UDP Tracker Protocol ([BEP 0015][])
+* Tracker Returns Compact Peer Lists ([BEP 0023][])
+
+[BEP 0003]: http://www.bittorrent.org/beps/bep_0003.html
+[the community spec]: https://wiki.theory.org/BitTorrentSpecification
+[BEP 0012]: http://www.bittorrent.org/beps/bep_0012.html
+[BEP 0015]: http://www.bittorrent.org/beps/bep_0015.html
+[BEP 0023]: http://www.bittorrent.org/beps/bep_0023.html
+
+Architecture
 ------------
 
-* Python 3.5
-* Modules `aiohttp` and `bitarray`
-* Module `bencodepy` (will not be required in the future)
+In this project I tried to avoid threads and use only asynchronous I/O. As a result, all algorithms and
+network interaction work in one thread running an asyncio event loop, but there're still a few additional threads:
+
+* Non-blocking disk I/O [isn't supported][asyncio-fs] by asyncio. To prevent freezes for up to a second
+during disk writing, blocking I/O runs in a [ThreadPoolExecutor][].
+* PyQt GUI runs in a main thread and invokes an asyncio event loop in a separate [QThread][]. Another option is
+to use a Qt event loop in asyncio with [quamash][], but this increases UI reaction time, and the Qt event loop
+may be less efficient than asyncio's default one.
+
+[asyncio-fs]: https://github.com/python/asyncio/wiki/ThirdParty#filesystem
+[ThreadPoolExecutor]: https://docs.python.org/3/library/concurrent.futures.html#concurrent.futures.ThreadPoolExecutor
+[QThread]: https://doc.qt.io/qt-5/qthread.html
+[quamash]: https://github.com/harvimt/quamash
+
+Program sources depend on Python 3.5 features: they are annotated with type hints ([PEP 0484][]) and
+use coroutines with `async`/`await` syntax ([PEP 0492][]).
+
+[PEP 0484]: https://www.python.org/dev/peps/pep-0484/
+[PEP 0492]: https://www.python.org/dev/peps/pep-0492/
+
+Installation
+------------
+
+The program requires:
+
+* Python 3.5+
+* `aiohttp`, `bencodepy`, and `bitarray` modules
 * PyQt5 (only for GUI)
 
-To install binary packages with the required Python version on Ubuntu you can use
-[fkrull/deadsnakes](https://launchpad.net/~fkrull/+archive/ubuntu/deadsnakes) repository that contains various
-versions of Python:
+Step-by-step guide:
 
-    $ sudo apt-add-repository ppa:fkrull/deadsnakes
-    $ sudo apt-get update
-    $ sudo apt-get install python3.5 python3.5-dev
+1. Install [Python 3.5](https://www.python.org/downloads/). You can use an installer for your OS or
+build the interpreter from sources.
 
-To install necessary modules run:
+    Most Linux distributions don't contain Python 3.5 in default repositories yet, but sometimes you can
+    use third-party repositories. For example,
+    [fkrull/deadsnakes](https://launchpad.net/~fkrull/+archive/ubuntu/deadsnakes) repository contains various versions
+    of Python for Ubuntu:
 
-    $ sudo python3.5 -m pip install aiohttp bitarray bencodepy
+        # apt-add-repository ppa:fkrull/deadsnakes
+        # apt-get update
+        # apt-get install python3.5 python3.5-dev
 
-GUI Usage
----------
+2. Install necessary modules:
+
+        # python3.5 -m pip install aiohttp bitarray bencodepy
+
+3. If you want to use graphical interface, install PyQt5 using
+[the official guide](http://pyqt.sourceforge.net/Docs/PyQt5/installation.html).
+
+Usage
+-----
+
+### Graphical interface
 
 Run:
 
     $ python3.5 torrent_gui.py
 
-Add `--debug` to enable debug mode.
+If there're torrent files provided as command line arguments, corresponding adding dialogs will be opened.
 
-CLI Usage
----------
+You can't start multiple GUI instances, but you can use this command to add more torrents (open the adding dialogs)
+to the first one.
+
+### Console interface
 
 1. Run a daemon in a separate terminal:
 
         $ python3.5 torrent_cli.py start
 
-    You also can enable debug mode (this slows down downloading):
+2. *(optional)* Look at a list of files in a torrent you want to download:
 
-        $ PYTHONASYNCIODEBUG=1 python3.5 -Wdefault torrent_cli.py --debug start
-
-2. *(Optional)* Look at a list of files in a torrent you want to download:
-
-        $ python3.5 torrent_cli.py show samples/debian-8.3.0-i386-netinst.iso.torrent
+        $ python3.5 torrent_cli.py show ~/Torrents/debian-8.3.0-i386-netinst.iso.torrent
 
 3. Specify a download directory and add the torrent to the daemon:
 
-        $ python3.5 torrent_cli.py add samples/debian-8.3.0-i386-netinst.iso.torrent -d ~/Downloads
+        $ python3.5 torrent_cli.py add ~/Torrents/debian-8.3.0-i386-netinst.iso.torrent -d ~/Downloads
 
-    If the torrent contains more than one file, you also can select which files you want to download
+    If the torrent contains more than one file, you can select which files you want to download
     using `--include` and `--exclude` options. For more information run:
 
         $ python3.5 torrent_cli.py add --help
@@ -60,9 +120,34 @@ CLI Usage
 
         $ watch python3.5 torrent_cli.py status
 
+    Add `-v` to increase output verbosity.
+
     You also can add more torrents, pause, resume, and remove them. For more information run:
 
         $ python3.5 torrent_cli.py --help
 
-5. You can stop the daemon by hitting `Ctrl+C` in its terminal.
-The daemon will resume downloading and uploading of torrents after the next start.
+5. To stop the daemon run:
+
+        $ python3.5 torrent_cli.py stop
+
+    The daemon will recover its state after restart.
+
+You can't start multiple daemons or start a console daemon when a GUI instance is already running,
+but you can use all console commands (except `stop`) to control the GUI daemon from the console.
+
+**Note:** Both GUI and CLI daemons binds one localhost port in range 6995-6999 for interprocess communication.
+Don't make this port available outside the localhost, because it can be used to execute arbitrary commands
+on your machine.
+
+### Debug mode
+
+You can enable a verbose debug mode for GUI and CLI daemons by adding `--debug` flag after the script name.
+
+You may also want to enable asyncio debug mode. This is done as follows:
+
+    $ PYTHONASYNCIODEBUG=1 python3.5 -Wdefault torrent_gui.py --debug
+
+Author
+------
+
+Copyright (c) 2016 Alexander Borzunov
