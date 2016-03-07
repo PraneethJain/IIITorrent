@@ -53,8 +53,9 @@ def run_daemon(_):
         control_server = ControlServer(control, stop_daemon)
         loop.run_until_complete(control_server.start())
 
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, partial(stop_daemon, control_server))
+        if os.name == 'posix':
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                loop.add_signal_handler(sig, partial(stop_daemon, control_server))
 
         loop.run_forever()
 
@@ -66,7 +67,7 @@ def show_handler(args):
     print(content_description, end='')
 
 
-PATH_SPLIT_RE = re.compile(r'/|{}'.format(os.path.sep))
+PATH_SPLIT_RE = re.compile(r'/|{}'.format(re.escape(os.path.sep)))
 
 
 async def add_handler(args):
