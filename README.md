@@ -56,32 +56,22 @@ use coroutines with `async`/`await` syntax ([PEP 0492][]).
 Installation
 ------------
 
-The program requires:
+The program can be run on Linux and Windows and requires:
 
 * Python 3.5+
 * `aiohttp`, `bencodepy`, and `bitarray` modules
 * PyQt5 (only for GUI)
 
-Step-by-step guide:
+On Ubuntu 16.04 or newer, the requirements can be installed with the following commands:
 
-1. Install [Python 3.5](https://www.python.org/downloads/). You can use an installer for your OS or
-build the interpreter from sources.
+    # apt-get install python3-pip python3-pyqt5
+    # python3.5 -m pip install aiohttp bitarray bencodepy
 
-    Most Linux distributions don't contain Python 3.5 in default repositories yet, but sometimes you can
-    use third-party repositories. For example,
-    [fkrull/deadsnakes](https://launchpad.net/~fkrull/+archive/ubuntu/deadsnakes) repository contains various versions
-    of Python for Ubuntu:
+Older Linux distributions don't contain pre-installed Python 3.5. Instead of installing `python3-pip` and `python3-pyqt5` packages, you may want to build Python 3.5 and the corresponding version of PyQt5 from sources.
 
-        # apt-add-repository ppa:fkrull/deadsnakes
-        # apt-get update
-        # apt-get install python3.5 python3.5-dev
+After installing the requirements, clone this repository:
 
-2. Install necessary modules:
-
-        # python3.5 -m pip install aiohttp bitarray bencodepy
-
-3. If you want to use graphical interface, install PyQt5 using
-[the official guide](http://pyqt.sourceforge.net/Docs/PyQt5/installation.html).
+    $ git clone https://github.com/borzunov/bit-torrent.git && cd bit-torrent
 
 Usage
 -----
