@@ -464,9 +464,9 @@ class MainWindow(QMainWindow):
         self._update_control_action_state()
 
     def _show_about(self):
-        QMessageBox.about(self, 'About', '<p><b>Prototype of BitTorrent client</b></p>'
-                                         '<p>Copyright (c) 2016 Alexander Borzunov</p>'
-                                         '<p>Icons made by Google and Freepik from '
+        QMessageBox.about(self, 'About', '<p><b>Prototype of a BitTorrent client</b></p>'
+                                         '<p>Copyright &copy; 2016 Alexander Borzunov</p>'
+                                         '<p>Icons are made by Google and Freepik from '
                                          '<a href="http://www.flaticon.com">www.flaticon.com</a></p>')
 
 
