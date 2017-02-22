@@ -85,7 +85,7 @@ class TorrentManager(QObject):
         await self._peer_manager.stop()
 
         executors = [task for task in self._executors if task is not None]
-        for task in executors:
+        for task in reversed(executors):
             task.cancel()
         if executors:
             await asyncio.wait(executors)

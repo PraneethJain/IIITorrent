@@ -17,7 +17,7 @@ from PyQt5.QtGui import QIcon, QFont, QDropEvent
 # noinspection PyUnresolvedReferences
 from PyQt5.QtWidgets import QWidget, QListWidget, QAbstractItemView, QLabel, QVBoxLayout, QProgressBar, \
     QListWidgetItem, QMainWindow, QApplication, QFileDialog, QMessageBox, QDialog, QDialogButtonBox, QTreeWidget, \
-    QTreeWidgetItem, QHeaderView, QHBoxLayout, QPushButton, QLineEdit
+    QTreeWidgetItem, QHeaderView, QHBoxLayout, QPushButton, QLineEdit, QAction
 
 from torrent_client.control import ControlManager, ControlServer, ControlClient
 from torrent_client.models import TorrentState, TorrentInfo, FileTreeNode, FileInfo
@@ -239,6 +239,7 @@ class TorrentListWidgetItem(QWidget):
         vbox.addWidget(self._lower_status_label)
 
         self._state = None
+        self._waiting_control_action = False
 
     @property
     def state(self) -> TorrentState:
@@ -247,6 +248,19 @@ class TorrentListWidgetItem(QWidget):
     @state.setter
     def state(self, state: TorrentState):
         self._state = state
+        self._update()
+
+    @property
+    def waiting_control_action(self) -> bool:
+        return self._waiting_control_action
+
+    @waiting_control_action.setter
+    def waiting_control_action(self, value: bool):
+        self._waiting_control_action = value
+        self._update()
+
+    def _update(self):
+        state = self._state
 
         self._name_label.setText(state.suggested_name)  # FIXME: Avoid XSS in all setText calls
 
@@ -259,7 +273,9 @@ class TorrentListWidgetItem(QWidget):
 
         self._progress_bar.setValue(floor(state.progress * 1000))
 
-        if state.paused:
+        if self.waiting_control_action:
+            status_text = 'Waiting'
+        elif state.paused:
             status_text = 'Paused'
         elif state.complete:
             status_text = 'Uploading to {} of {} peers'.format(state.uploading_peer_count, state.total_peer_count)
@@ -375,6 +391,8 @@ class MainWindow(QMainWindow):
             return
 
         widget = self._list_widget.itemWidget(self._torrent_to_item[state.info_hash])
+        if widget.state.paused != state.paused:
+            widget.waiting_control_action = False
         widget.state = state
 
         self._update_control_action_state()
@@ -391,8 +409,11 @@ class MainWindow(QMainWindow):
         self._resume_action.setEnabled(False)
         self._remove_action.setEnabled(False)
         for item in self._list_widget.selectedItems():
-            state = self._list_widget.itemWidget(item).state
-            if state.paused:
+            widget = self._list_widget.itemWidget(item)
+            if widget.waiting_control_action:
+                continue
+
+            if widget.state.paused:
                 self._resume_action.setEnabled(True)
             else:
                 self._pause_action.setEnabled(True)
@@ -431,9 +452,16 @@ class MainWindow(QMainWindow):
 
     def _control_action_triggered(self, action):
         for item in self._list_widget.selectedItems():
+            widget = self._list_widget.itemWidget(item)
+            if widget.waiting_control_action:
+                continue
+
             info_hash = item.data(Qt.UserRole)
             asyncio.run_coroutine_threadsafe(MainWindow._invoke_control_action(action, info_hash),
                                              self._control_thread.loop)
+            widget.waiting_control_action = True
+
+        self._update_control_action_state()
 
     def _show_about(self):
         QMessageBox.about(self, 'About', '<p><b>Prototype of BitTorrent client</b></p>'
