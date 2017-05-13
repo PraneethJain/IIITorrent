@@ -33,12 +33,11 @@ Implemented specifications:
 Architecture
 ------------
 
-In this project I tried to avoid threads and use only asynchronous I/O. As a result, all algorithms and
-network interaction work in one thread running an asyncio event loop, but there're still a few additional threads:
+In this project, I tried to avoid threads and use only asynchronous I/O. As a result, all algorithms and network interaction work in one thread running an asyncio event loop, but there are still a few additional threads:
 
 * Non-blocking disk I/O [isn't supported][asyncio-fs] by asyncio. To prevent freezes for up to a second
 during disk writing, blocking I/O runs in a [ThreadPoolExecutor][].
-* PyQt GUI runs in a main thread and invokes an asyncio event loop in a separate [QThread][]. Another option is
+* PyQt GUI runs in the main thread and invokes an asyncio event loop in a separate [QThread][]. Another option is
 to use a Qt event loop in asyncio with [quamash][], but this increases UI reaction time, and the Qt event loop
 may be less efficient than asyncio's default one.
 
@@ -82,7 +81,7 @@ Run:
 
     $ python3.5 torrent_gui.py
 
-If there're torrent files provided as command line arguments, corresponding adding dialogs will be opened.
+If torrent files are provided as command line arguments, corresponding adding dialogs will be opened.
 
 You can't start multiple GUI instances, but you can use this command to add more torrents (open the adding dialogs)
 to the first one.
