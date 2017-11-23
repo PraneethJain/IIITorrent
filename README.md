@@ -46,7 +46,7 @@ may be less efficient than asyncio's default one.
 [QThread]: https://doc.qt.io/qt-5/qthread.html
 [quamash]: https://github.com/harvimt/quamash
 
-Program sources depend on Python 3.5 features: they are annotated with type hints ([PEP 0484][]) and
+Program sources depend on Python 3.5+ features: they are annotated with type hints ([PEP 0484][]) and
 use coroutines with `async`/`await` syntax ([PEP 0492][]).
 
 [PEP 0484]: https://www.python.org/dev/peps/pep-0484/
@@ -55,7 +55,7 @@ use coroutines with `async`/`await` syntax ([PEP 0492][]).
 Installation
 ------------
 
-The program can be run on Linux and Windows and requires:
+The program works on Linux, macOS, and Windows. It requires:
 
 * Python 3.5+
 * `aiohttp`, `bencodepy`, and `bitarray` modules
@@ -64,9 +64,7 @@ The program can be run on Linux and Windows and requires:
 On Ubuntu 16.04 or newer, the requirements can be installed with the following commands:
 
     # apt-get install python3-pip python3-pyqt5
-    # python3.5 -m pip install aiohttp bitarray bencodepy
-
-Older Linux distributions don't contain pre-installed Python 3.5. Instead of installing `python3-pip` and `python3-pyqt5` packages, you may want to build Python 3.5 and the corresponding version of PyQt5 from sources.
+    # python3 -m pip install aiohttp bitarray bencodepy
 
 After installing the requirements, clone this repository:
 
@@ -79,7 +77,7 @@ Usage
 
 Run:
 
-    $ python3.5 torrent_gui.py
+    $ python3 torrent_gui.py
 
 If torrent files are provided as command line arguments, corresponding adding dialogs will be opened.
 
@@ -90,34 +88,34 @@ to the first one.
 
 1. Run a daemon in a separate terminal:
 
-        $ python3.5 torrent_cli.py start
+        $ python3 torrent_cli.py start
 
 2. *(optional)* Look at a list of files in a torrent you want to download:
 
-        $ python3.5 torrent_cli.py show ~/Torrents/debian-8.3.0-i386-netinst.iso.torrent
+        $ python3 torrent_cli.py show ~/Torrents/debian-8.3.0-i386-netinst.iso.torrent
 
 3. Specify a download directory and add the torrent to the daemon:
 
-        $ python3.5 torrent_cli.py add ~/Torrents/debian-8.3.0-i386-netinst.iso.torrent -d ~/Downloads
+        $ python3 torrent_cli.py add ~/Torrents/debian-8.3.0-i386-netinst.iso.torrent -d ~/Downloads
 
     If the torrent contains more than one file, you can select which files you want to download
     using `--include` and `--exclude` options. For more information run:
 
-        $ python3.5 torrent_cli.py add --help
+        $ python3 torrent_cli.py add --help
 
 4. Watch torrent status:
 
-        $ watch python3.5 torrent_cli.py status
+        $ watch python3 torrent_cli.py status
 
     Add `-v` to increase output verbosity.
 
     You also can add more torrents, pause, resume, and remove them. For more information run:
 
-        $ python3.5 torrent_cli.py --help
+        $ python3 torrent_cli.py --help
 
 5. To stop the daemon run:
 
-        $ python3.5 torrent_cli.py stop
+        $ python3 torrent_cli.py stop
 
     The daemon will recover its state after restart.
 
@@ -134,9 +132,9 @@ You can enable a verbose debug mode for GUI and CLI daemons by adding `--debug` 
 
 You may also want to enable asyncio debug mode. This is done as follows:
 
-    $ PYTHONASYNCIODEBUG=1 python3.5 -Wdefault torrent_gui.py --debug
+    $ PYTHONASYNCIODEBUG=1 python3 -Wdefault torrent_gui.py --debug
 
 Author
 ------
 
-Copyright (c) 2016 Alexander Borzunov
+Copyright &copy; 2016-2017 Alexander Borzunov
