@@ -4,7 +4,9 @@ from collections import OrderedDict
 from typing import Optional, cast
 
 import aiohttp
+import async_timeout
 import bencodepy
+import yarl
 
 from torrent_client.models import Peer, DownloadInfo
 from torrent_client.network.tracker_clients.base import BaseTrackerClient, TrackerError, parse_compact_peers_list, \
@@ -71,9 +73,14 @@ class HTTPTrackerClient(BaseTrackerClient):
         if self._tracker_id is not None:
             params['trackerid'] = self._tracker_id
 
-        with aiohttp.Timeout(HTTPTrackerClient.REQUEST_TIMEOUT), aiohttp.ClientSession() as session:
-            async with session.get(self._announce_url, params=params) as conn:
-                response = await conn.read()
+        params = {name: urllib.parse.quote(value) if isinstance(value, bytes) else value
+                  for name, value in params.items()}
+        url = yarl.URL(self._announce_url).update_query(params)
+
+        with async_timeout.timeout(HTTPTrackerClient.REQUEST_TIMEOUT):
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as conn:
+                    response = await conn.read()
 
         response = bencodepy.decode(response)
         if not response:
