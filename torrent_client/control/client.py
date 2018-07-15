@@ -37,7 +37,7 @@ class ControlClient:
             else:
                 break
         else:
-            raise RuntimeError('Failed to connect to a control server')
+            raise RuntimeError("Can't connect to the control server (run \"./torrent_cli.py start\" first)")
 
     async def execute(self, action: Callable[[ControlManager], T]) -> T:
         ControlServer.send_object(action, self._writer)

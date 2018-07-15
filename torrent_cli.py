@@ -9,6 +9,7 @@ import signal
 import sys
 from contextlib import closing, suppress
 from functools import partial
+from typing import List
 
 from torrent_client.control import ControlManager, ControlClient, ControlServer, DaemonExit, formatters
 from torrent_client.models import TorrentInfo, TorrentState
@@ -108,11 +109,8 @@ async def control_action_handler(args):
             await client.execute(partial(action, info_hash=info.download_info.info_hash))
 
 
-def status_server_handler(manager: ControlManager) -> str:
+def status_server_handler(manager: ControlManager) -> List[TorrentState]:
     torrents = manager.get_torrents()
-    if not torrents:
-        return 'No torrents added'
-
     torrents.sort(key=lambda info: info.download_info.suggested_name)
     return [TorrentState(torrent_info) for torrent_info in torrents]
 
@@ -120,6 +118,9 @@ def status_server_handler(manager: ControlManager) -> str:
 async def status_handler(args):
     async with ControlClient() as client:
         torrent_states = await client.execute(status_server_handler)
+    if not torrent_states:
+        print('No torrents added')
+        return
 
     paragraphs = [formatters.join_lines(formatters.format_title(state, args.verbose) +
                                         formatters.format_status(state, args.verbose))
@@ -153,17 +154,18 @@ def main():
     subparsers = parser.add_subparsers(description='Specify an action before "--help" to show parameters for it.',
                                        metavar='ACTION', dest='action')
 
-    subparser = subparsers.add_parser('start', help='Start a daemon')
+    subparser = subparsers.add_parser('start', help='Start the daemon')
     subparser.set_defaults(func=run_daemon)
 
     subparser = subparsers.add_parser('stop', help='Stop the daemon')
     subparser.set_defaults(func=partial(run_in_event_loop, stop_handler))
 
-    subparser = subparsers.add_parser('show', help="Show torrent content (no daemon required)")
+    subparser = subparsers.add_parser('show', help="Show contents of a torrent file "
+                                                   "(you don't need to start the daemon for that)")
     subparser.add_argument('filename', help='Torrent file name')
     subparser.set_defaults(func=show_handler)
 
-    subparser = subparsers.add_parser('add', help='Add a new torrent')
+    subparser = subparsers.add_parser('add', help='Add torrent from file')
     subparser.add_argument('filenames', nargs='+',
                            help='Torrent file names')
     subparser.add_argument('-d', '--download-dir', default=DEFAULT_DOWNLOAD_DIR,
@@ -177,12 +179,12 @@ def main():
 
     control_commands = ['pause', 'resume', 'remove']
     for command_name in control_commands:
-        subparser = subparsers.add_parser(command_name, help='{} torrent'.format(command_name.capitalize()))
-        subparser.add_argument('filenames', nargs='*' if command_name != 'remove' else '+',
+        subparser = subparsers.add_parser(command_name, help='{} torrent from file'.format(command_name.capitalize()))
+        subparser.add_argument('filenames', nargs='+',
                                help='Torrent file names')
         subparser.set_defaults(func=partial(run_in_event_loop, control_action_handler))
 
-    subparser = subparsers.add_parser('status', help='Show status')
+    subparser = subparsers.add_parser('status', help='Show status of all torrents')
     subparser.add_argument('-v', '--verbose', action='store_true',
                            help='Increase output verbosity')
     subparser.set_defaults(func=partial(run_in_event_loop, status_handler))
