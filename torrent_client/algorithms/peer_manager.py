@@ -9,7 +9,7 @@ from torrent_client.network import PeerTCPClient
 
 
 class PeerData:
-    DOWNLOAD_REQUEST_QUEUE_SIZE = 12
+    DOWNLOAD_REQUEST_QUEUE_SIZE = 150
 
     def __init__(self, client: PeerTCPClient, client_task: asyncio.Task, connected_time: float):
         self._client = client
