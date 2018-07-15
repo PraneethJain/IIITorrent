@@ -25,7 +25,7 @@ async def check_daemon_absence():
     except RuntimeError:
         pass
     else:
-        raise RuntimeError('A daemon on this port is already running')
+        raise RuntimeError('The daemon is already running')
 
 
 def run_daemon(_):

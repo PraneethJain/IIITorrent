@@ -3,8 +3,6 @@ bit-torrent
 
 Simple BitTorrent client built with Python's asyncio
 
-*A project I made for Python course.*
-
 ![Main window screenshot](screenshot.png)
 
 Features
@@ -55,20 +53,23 @@ use coroutines with `async`/`await` syntax ([PEP 0492][]).
 Installation
 ------------
 
-The program works on Linux, macOS, and Windows. It requires:
+The program requires Python 3.5+ and works on Linux, macOS, and Windows. You also need PyQt 5 to run GUI.
 
-* Python 3.5+
-* `aiohttp`, `bencodepy`, and `bitarray` modules
-* PyQt5 (only for GUI)
+On Ubuntu 16.04 or newer, run:
 
-On Ubuntu 16.04 or newer, the requirements can be installed with the following commands:
+```bash
+sudo apt-get install python3-pip python3-pyqt5
+sudo python3 -m pip install -r requirements.txt
+git clone https://github.com/borzunov/bit-torrent.git && cd bit-torrent
+```
 
-    # apt-get install python3-pip python3-pyqt5
-    # python3 -m pip install aiohttp bitarray bencodepy
+On macOS, run:
 
-After installing the requirements, clone this repository:
-
-    $ git clone https://github.com/borzunov/bit-torrent.git && cd bit-torrent
+```bash
+python3 -m pip install -r requirements.txt
+python3 -m pip install PyQt5
+git clone https://github.com/borzunov/bit-torrent.git && cd bit-torrent
+```
 
 Usage
 -----
@@ -77,54 +78,44 @@ Usage
 
 Run:
 
-    $ python3 torrent_gui.py
+    python3 torrent_gui.py
 
 If torrent files are provided as command line arguments, corresponding adding dialogs will be opened.
 
-You can't start multiple GUI instances, but you can use this command to add more torrents (open the adding dialogs)
-to the first one.
-
 ### Console interface
 
-1. Run a daemon in a separate terminal:
+1. Start a daemon:
 
-        $ python3 torrent_cli.py start
+        python3 torrent_cli.py start &
 
 2. *(optional)* Look at a list of files in a torrent you want to download:
 
-        $ python3 torrent_cli.py show ~/Torrents/debian-8.3.0-i386-netinst.iso.torrent
+        python3 torrent_cli.py show ~/Torrents/debian-8.3.0-i386-netinst.iso.torrent
 
 3. Specify a download directory and add the torrent to the daemon:
 
-        $ python3 torrent_cli.py add ~/Torrents/debian-8.3.0-i386-netinst.iso.torrent -d ~/Downloads
+        python3 torrent_cli.py add ~/Torrents/debian-8.3.0-i386-netinst.iso.torrent -d ~/Downloads
 
     If the torrent contains more than one file, you can select which files you want to download
     using `--include` and `--exclude` options. For more information run:
 
-        $ python3 torrent_cli.py add --help
+        python3 torrent_cli.py add --help
 
 4. Watch torrent status:
 
-        $ watch python3 torrent_cli.py status
+        watch python3 torrent_cli.py status
 
     Add `-v` to increase output verbosity.
 
     You also can add more torrents, pause, resume, and remove them. For more information run:
 
-        $ python3 torrent_cli.py --help
+        python3 torrent_cli.py --help
 
 5. To stop the daemon run:
 
-        $ python3 torrent_cli.py stop
+        python3 torrent_cli.py stop
 
-    The daemon will recover its state after restart.
-
-You can't start multiple daemons or start a console daemon when a GUI instance is already running,
-but you can use all console commands (except `stop`) to control the GUI daemon from the console.
-
-**Note:** Both GUI and CLI daemons binds one localhost port in range 6995-6999 for interprocess communication.
-Don't make this port available outside the localhost, because it can be used to execute arbitrary commands
-on your machine.
+    The daemon will restore its state after restart.
 
 ### Debug mode
 
@@ -132,7 +123,7 @@ You can enable a verbose debug mode for GUI and CLI daemons by adding `--debug` 
 
 You may also want to enable asyncio debug mode. This is done as follows:
 
-    $ PYTHONASYNCIODEBUG=1 python3 -Wdefault torrent_gui.py --debug
+    PYTHONASYNCIODEBUG=1 python3 -Wdefault torrent_gui.py --debug
 
 Author
 ------

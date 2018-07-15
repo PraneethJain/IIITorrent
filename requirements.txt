@@ -1,0 +1,8 @@
+aiohttp==2.3.3
+async-timeout==2.0.0
+bencodepy==0.9.5
+bitarray==0.8.1
+chardet==3.0.4
+multidict==3.3.2
+sip==4.19.5
+yarl==0.14.2
