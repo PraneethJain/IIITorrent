@@ -59,16 +59,16 @@ On Ubuntu 16.04 or newer, run:
 
 ```bash
 sudo apt-get install python3-pip python3-pyqt5
-sudo python3 -m pip install -r requirements.txt
 git clone https://github.com/borzunov/bit-torrent.git && cd bit-torrent
+sudo python3 -m pip install -r requirements.txt
 ```
 
 On macOS, run:
 
 ```bash
-python3 -m pip install -r requirements.txt
 python3 -m pip install PyQt5
 git clone https://github.com/borzunov/bit-torrent.git && cd bit-torrent
+python3 -m pip install -r requirements.txt
 ```
 
 Usage
