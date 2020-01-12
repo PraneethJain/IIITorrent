@@ -65,7 +65,8 @@ def run_daemon(_):
 def show_handler(args):
     torrent_info = TorrentInfo.from_file(args.filename, download_dir=None)
     content_description = formatters.join_lines(
-        formatters.format_title(torrent_info, True) + formatters.format_content(torrent_info))
+        formatters.format_title(torrent_info.download_info, True) +
+        formatters.format_content(torrent_info))
     print(content_description, end='')
 
 
