@@ -1,8 +1,8 @@
 aiohttp==3.7.4
-async-timeout==2.0.0
+async-timeout==3.0.0
 bencodepy==0.9.5
 bitarray==0.8.1
 chardet==3.0.4
-multidict==3.3.2
+multidict==4.5
 sip==5.1.0
-yarl==0.14.2
+yarl==1.0
