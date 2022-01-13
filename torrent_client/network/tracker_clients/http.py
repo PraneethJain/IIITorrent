@@ -72,7 +72,7 @@ class HTTPTrackerClient(BaseTrackerClient):
         if self._tracker_id is not None:
             params['trackerid'] = self._tracker_id
 
-        # We call urlencode() manually to proper encode `bytes` (e.g., info_hash)
+        # We call urlencode() manually to properly encode `bytes` (e.g., info_hash)
         url = self._announce_url._replace(query=urllib.parse.urlencode(params))
 
         with async_timeout.timeout(HTTPTrackerClient.REQUEST_TIMEOUT):

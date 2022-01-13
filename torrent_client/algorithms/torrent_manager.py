@@ -89,5 +89,3 @@ class TorrentManager(QObject):
             task.cancel()
         if executors:
             await asyncio.wait(executors)
-
-        self._file_structure.close()

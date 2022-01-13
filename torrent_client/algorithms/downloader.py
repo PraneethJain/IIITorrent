@@ -66,10 +66,6 @@ class Downloader(QObject):
         cur_piece_length = self._download_info.get_real_piece_length(index)
         return piece_offset, cur_piece_length
 
-    async def _flush_piece(self, index: int):
-        piece_offset, cur_piece_length = self._get_piece_position(index)
-        await self._file_structure.flush(piece_offset, cur_piece_length)
-
     FLAG_TRANSMISSION_TIMEOUT = 0.5
 
     def _send_cancels(self, request: BlockRequestFuture):
@@ -150,7 +146,6 @@ class Downloader(QObject):
         data = await self._file_structure.read(piece_offset, cur_piece_length)
         actual_digest = hashlib.sha1(data).digest()
         if actual_digest == piece_info.piece_hash:
-            await self._flush_piece(piece_index)
             self._finish_downloading_piece(piece_index)
             return
 
