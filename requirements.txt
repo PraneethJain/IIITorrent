@@ -5,4 +5,3 @@ bitarray==0.8.1
 chardet==3.0.4
 multidict==4.5
 sip==5.1.0
-yarl==1.0

@@ -6,7 +6,6 @@ from typing import Optional, cast
 import aiohttp
 import async_timeout
 import bencodepy
-import yarl
 
 from torrent_client.models import Peer, DownloadInfo
 from torrent_client.network.tracker_clients.base import BaseTrackerClient, TrackerError, parse_compact_peers_list, \
@@ -23,7 +22,7 @@ logger.setLevel(logging.DEBUG)
 class HTTPTrackerClient(BaseTrackerClient):
     def __init__(self, url: urllib.parse.ParseResult, download_info: DownloadInfo, our_peer_id: bytes):
         super().__init__(download_info, our_peer_id)
-        self._announce_url = url.geturl()
+        self._announce_url = url
         if url.scheme not in ('http', 'https'):
             raise ValueError('TrackerHTTPClient expects announce_url with HTTP and HTTPS protocol')
 
@@ -73,13 +72,12 @@ class HTTPTrackerClient(BaseTrackerClient):
         if self._tracker_id is not None:
             params['trackerid'] = self._tracker_id
 
-        params = {name: urllib.parse.quote(value) if isinstance(value, bytes) else value
-                  for name, value in params.items()}
-        url = yarl.URL(self._announce_url).update_query(params)
+        # We call urlencode() manually to proper encode `bytes` (e.g., info_hash)
+        url = self._announce_url._replace(query=urllib.parse.urlencode(params))
 
         with async_timeout.timeout(HTTPTrackerClient.REQUEST_TIMEOUT):
             async with aiohttp.ClientSession() as session:
-                async with session.get(url) as conn:
+                async with session.get(url.geturl()) as conn:
                     response = await conn.read()
 
         response = bencodepy.decode(response)
