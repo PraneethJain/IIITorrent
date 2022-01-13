@@ -90,11 +90,11 @@ If torrent files are provided as command line arguments, corresponding adding di
 
 2. *(optional)* Look at a list of files in a torrent you want to download:
 
-        python3 torrent_cli.py show ~/Torrents/debian-8.3.0-i386-netinst.iso.torrent
+        python3 torrent_cli.py show ./examples/debian-11.2.0-amd64-netinst.iso.torrent
 
 3. Specify a download directory and add the torrent to the daemon:
 
-        python3 torrent_cli.py add ~/Torrents/debian-8.3.0-i386-netinst.iso.torrent -d ~/Downloads
+        python3 torrent_cli.py add ./examples/debian-11.2.0-amd64-netinst.iso.torrent -d ./downloads
 
     If the torrent contains more than one file, you can select which files you want to download
     using `--include` and `--exclude` options. For more information run:
