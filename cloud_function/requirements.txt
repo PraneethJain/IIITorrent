@@ -1,3 +1,10 @@
 functions-framework==3.*
 google-cloud-storage==2.14.*
 demagnetize==0.3.*
+aiohttp==3.7.4
+async-timeout==3.0.0
+bencodepy==0.9.5
+bitarray==0.8.1
+chardet==3.0.4
+multidict==4.5
+sip==5.1.0
