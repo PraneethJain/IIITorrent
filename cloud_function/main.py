@@ -1,6 +1,5 @@
 import functions_framework
 from google.cloud import storage
-from time import sleep
 import os
 
 
@@ -15,22 +14,22 @@ def hello_http(request):
         Response object using `make_response`
         <https://flask.palletsprojects.com/en/1.1.x/api/#flask.make_response>.
     """
-
     request_json = request.get_json(silent=True)
     magnet_link = request_json["magnet"]
-    print(magnet_link)
+
+    print(f"converting to .torrent")
+    os.system(f'demagnetize get "f{magnet_link}" -o tor.torrent')
+    print(f"convered to .torrent")
 
     storage_client = storage.Client()
     bucket = storage_client.get_bucket("iiitorrent")
 
-    os.makedirs("behera", exist_ok=True)
+    os.makedirs("gcptemp", exist_ok=True)
     for i in range(10):
-        filepath = f"behera/ok{i}.txt"
-        with open(filepath, "w") as f:
-            f.write("random text from i = {i}")
+        filepath = f"gcptemp/ok{i}.txt"
+        os.system(f"echo 'random text from i = {i}' >> {filepath}")
         blob = bucket.blob(filepath)
         blob.upload_from_filename(filepath)
-        sleep(1)
         os.remove(filepath)
 
-    return "test!"
+    return "have fun"
