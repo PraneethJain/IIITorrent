@@ -2,6 +2,7 @@ import functions_framework
 from google.cloud import storage
 import os
 
+from torrent_start import send_requests
 
 @functions_framework.http
 def hello_http(request):
@@ -21,9 +22,8 @@ def hello_http(request):
     os.system(f'demagnetize get "f{magnet_link}" -o tor.torrent')
     print(f"convered to .torrent")
 
-    storage_client = storage.Client()
-    bucket = storage_client.get_bucket("iiitorrent")
-
+    send_requests('tor.torrent')
+    
     os.makedirs("gcptemp", exist_ok=True)
     for i in range(10):
         filepath = f"gcptemp/ok{i}.txt"
@@ -31,5 +31,4 @@ def hello_http(request):
         blob = bucket.blob(filepath)
         blob.upload_from_filename(filepath)
         os.remove(filepath)
-
     return "have fun"

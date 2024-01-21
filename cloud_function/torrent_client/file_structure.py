@@ -34,8 +34,8 @@ class FileStructure:
         # with open("index", 'w') as index:
         print(self._download_info.file_tree)
         
-        for i, file in enumerate(download_info.pieces):
-            path = os.path.join(download_dir, download_info.suggested_name, f"piece-{i}") 
+        for file in download_info.files:
+            path = os.path.join(download_dir, download_info.suggested_name, *file.path) 
             directory = os.path.dirname(path)
             if not os.path.isdir(directory):
                 os.makedirs(os.path.normpath(directory))
