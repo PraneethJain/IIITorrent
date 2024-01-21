@@ -21,7 +21,6 @@ def delegate_to_executor(func):
 
     return wrapper
 
-
 class FileStructure:
     def __init__(self, download_dir: str, download_info: DownloadInfo):
         self._download_info = download_info
@@ -32,8 +31,11 @@ class FileStructure:
         self._offsets = []
         offset = 0
 
-        for file in download_info.files:
-            path = os.path.join(download_dir, download_info.suggested_name, *file.path)
+        # with open("index", 'w') as index:
+        print(self._download_info.file_tree)
+        
+        for i, file in enumerate(download_info.pieces):
+            path = os.path.join(download_dir, download_info.suggested_name, f"piece-{i}") 
             directory = os.path.dirname(path)
             if not os.path.isdir(directory):
                 os.makedirs(os.path.normpath(directory))

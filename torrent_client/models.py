@@ -77,6 +77,12 @@ class FileInfo:
         self.offset = None
         self.selected = True
 
+    def __str__(self):
+        return str(self._path)
+
+    def __repr__(self):
+        return str(self._path)
+            
     @property
     def length(self) -> int:
         return self._length
@@ -144,7 +150,7 @@ class PieceInfo:
         self._block_downloaded = None  # type: Optional[bitarray]
         self._blocks_expected = None
         self.reset_content()
-
+    
     def reset_content(self):
         self._downloaded = False
         self._sources = set()

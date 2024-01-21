@@ -129,6 +129,23 @@ async def status_handler(args):
     print('\n'.join(paragraphs).rstrip())
 
 
+def status_server_handler(manager: ControlManager) -> List[TorrentState]:
+    torrents = manager.get_torrents()
+    torrents.sort(key=lambda info: info.download_info.suggested_name)
+    return [TorrentState(torrent_info) for torrent_info in torrents]
+
+async def status_machine_handler(args):
+    async with ControlClient() as client:
+        torrent_states = await client.execute(status_server_handler)
+    if not torrent_states:
+        print('No torrents added')
+        return
+
+    paragraphs = [formatters.join_lines(formatters.format_machine_title(state, args.verbose) +
+                                        formatters.format_machine_status(state, args.verbose))
+                  for state in torrent_states]
+    print('\n'.join(paragraphs).rstrip())
+
 def stop_server_handler(_: ControlManager):
     raise DaemonExit()
 
@@ -190,6 +207,11 @@ def main():
                            help='Increase output verbosity')
     subparser.set_defaults(func=partial(run_in_event_loop, status_handler))
 
+    subparser = subparsers.add_parser('status-machine', help='Show status of all torrents')
+    subparser.add_argument('-v', '--verbose', action='store_true',
+                           help='Increase output verbosity')
+    subparser.set_defaults(func=partial(run_in_event_loop, status_machine_handler))
+    
     arguments = parser.parse_args()
     if not arguments.debug:
         logging.disable(logging.INFO)

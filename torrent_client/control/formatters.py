@@ -76,3 +76,33 @@ def format_status(state: TorrentState, long_format: bool) -> List[str]:
     lines.append('Progress: {:5.1f}% [{}]\n'.format(floor_to(progress * 100, 1), progress_bar))
 
     return lines
+
+
+def format_machine_title(info: Union[DownloadInfo, TorrentState], long_format: bool) -> List[str]:
+    lines = ['{}\n'.format(info.suggested_name)]
+    return lines
+
+
+def format_machine_status(state: TorrentState, long_format: bool) -> List[str]:
+    lines = []
+
+    if long_format:
+        lines.append('{} {} {} {}\n'.format(
+            state.selected_file_count, state.total_file_count, state.selected_piece_count, state.total_piece_count))
+        lines.append('{}\n'.format(state.download_dir))
+
+        if state.paused:
+            general_status = 'Paused\n'
+        elif state.complete:
+            general_status = 'Uploading\n'
+        else:
+            general_status = 'Downloading\n'
+        lines.append(general_status)
+        lines.append('{} {} '.format(state.downloading_peer_count, state.total_peer_count))
+        lines.append('{} {}\n'.format(state.uploading_peer_count, state.total_peer_count))
+
+    progress = state.progress
+    lines.append('{}'.format(progress))
+
+    return lines
+
